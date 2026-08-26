@@ -1,1 +1,1 @@
-window.PDGA_PICKS_API_URL = "";
+window.PDGA_PICKS_API_URL = "https://script.google.com/macros/s/AKfycby8qL3TJuXLvHPNPmNEJ7rP2tqBa8ywyi-el6z8LltVksyryIkVO81DOelj3O3rmQ/exec";
