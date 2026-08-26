@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>PDGA Picks — Live</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg:#f3f6fa; --card:#fff; --card2:#f8fafc; --text:#111827; --muted:#64748b;
+      --line:#e2e8f0; --soft:#eef2f7; --accent:#1d4ed8; --good:#0f766e; --drop:#94a3b8;
+      --shadow:0 8px 28px rgba(15,23,42,.08);
+    }
+    [data-theme="dark"] {
+      --bg:#080d16; --card:#111827; --card2:#172033; --text:#f8fafc; --muted:#94a3b8;
+      --line:#263244; --soft:#1a2535; --accent:#60a5fa; --good:#5eead4; --drop:#64748b;
+      --shadow:0 10px 32px rgba(0,0,0,.28);
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    body{padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+    button,a{font:inherit}
+    .wrap{width:min(1180px,100%);margin:0 auto;padding:18px}
+    .topbar{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:16px}
+    h1{margin:0;font-size:clamp(1.55rem,4vw,2.4rem);letter-spacing:-.035em;line-height:1}
+    .subtitle{margin:7px 0 0;color:var(--muted);font-size:.92rem}
+    .actions{display:flex;gap:8px;flex:0 0 auto}
+    .icon-btn{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:12px;padding:9px 11px;cursor:pointer;box-shadow:var(--shadow)}
+    .statusbar{display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:11px 13px;margin-bottom:14px;box-shadow:var(--shadow)}
+    .status-left{display:flex;align-items:center;gap:9px;min-width:0}
+    .dot{width:9px;height:9px;border-radius:50%;background:#f59e0b;box-shadow:0 0 0 4px rgba(245,158,11,.13);flex:0 0 auto}
+    .dot.live{background:#10b981;box-shadow:0 0 0 4px rgba(16,185,129,.13)}
+    .dot.error{background:#ef4444;box-shadow:0 0 0 4px rgba(239,68,68,.13)}
+    #statusText{font-weight:700;font-size:.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #updatedText{color:var(--muted);font-size:.79rem;white-space:nowrap}
+    .leaderboard{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
+    .leader{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;box-shadow:var(--shadow);display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px}
+    .rank-badge{width:34px;height:34px;border-radius:50%;background:var(--soft);display:grid;place-items:center;font-weight:900}
+    .leader-name{font-weight:800}
+    .leader-drop{font-size:.76rem;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .leader-total{font-size:1.55rem;font-weight:900;letter-spacing:-.035em}
+    .cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+    .entrant-card{background:var(--card);border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:var(--shadow)}
+    .entrant-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 15px 12px;border-bottom:1px solid var(--line)}
+    .entrant-title{display:flex;align-items:center;gap:9px;min-width:0}
+    .entrant-rank{font-size:.78rem;font-weight:900;background:var(--soft);border-radius:999px;padding:5px 8px}
+    .entrant-name{font-size:1.15rem;font-weight:900}
+    .entrant-score{font-size:1.55rem;font-weight:950;letter-spacing:-.04em}
+    .drop-note{padding:9px 15px;background:var(--card2);border-bottom:1px solid var(--line);font-size:.76rem;color:var(--muted)}
+    .players{display:grid}
+    .player{padding:12px 14px;border-bottom:1px solid var(--line)}
+    .player:last-child{border-bottom:0}
+    .player.drop{opacity:.58;background:var(--card2)}
+    .player-main{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:start}
+    .player-name{font-weight:780;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .drop .player-name{text-decoration:line-through}
+    .player-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:5px;color:var(--muted);font-size:.72rem}
+    .pill{background:var(--soft);border-radius:999px;padding:3px 6px;line-height:1}
+    .pill.drop-pill{font-weight:900;color:var(--text)}
+    .player-total{font-size:1.05rem;font-weight:900;min-width:36px;text-align:right}
+    .rounds{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-top:9px}
+    .round{background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:5px 2px;text-align:center}
+    .round-label{display:block;color:var(--muted);font-size:.59rem;font-weight:800;line-height:1}
+    .round-score{display:block;margin-top:3px;font-size:.77rem;font-weight:850}
+    .setup{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px;box-shadow:var(--shadow)}
+    .setup h2{margin:0 0 8px;font-size:1.2rem}
+    .setup p{margin:6px 0;color:var(--muted);line-height:1.45}
+    .setup code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text)}
+    .footer{display:flex;justify-content:center;padding:18px 0 4px}
+    .pdga-link{color:var(--accent);font-size:.84rem;font-weight:750}
+    .hidden{display:none!important}
+    @media(max-width:860px){.cards{grid-template-columns:1fr}.leaderboard{grid-template-columns:1fr 1fr 1fr}.wrap{padding:12px}.entrant-card{border-radius:15px}}
+    @media(max-width:560px){
+      .wrap{padding:10px}
+      .topbar{align-items:center;margin-bottom:11px}
+      h1{font-size:1.5rem}
+      .subtitle{font-size:.78rem}
+      .icon-btn{padding:8px 9px;border-radius:10px}
+      .statusbar{padding:9px 10px;border-radius:12px}
+      #updatedText{display:none}
+      .leaderboard{gap:6px;margin-bottom:10px}
+      .leader{grid-template-columns:1fr;padding:9px;text-align:center;gap:2px;border-radius:12px}
+      .rank-badge{display:none}
+      .leader-name{font-size:.78rem}
+      .leader-drop{display:none}
+      .leader-total{font-size:1.18rem}
+      .cards{gap:10px}
+      .entrant-head{padding:12px}
+      .entrant-score{font-size:1.35rem}
+      .drop-note{padding:7px 12px}
+      .player{padding:10px 12px}
+      .rounds{gap:4px}
+      .round{padding:4px 1px}
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="topbar">
+      <div>
+        <h1>PDGA Picks</h1>
+        <p class="subtitle">2026 Pro Worlds · MPO · Best 4 of 5</p>
+      </div>
+      <div class="actions">
+        <button class="icon-btn" id="refreshBtn" type="button" aria-label="Refresh scores">↻</button>
+        <button class="icon-btn" id="themeBtn" type="button" aria-label="Toggle theme">◐</button>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <div class="status-left">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">Connecting…</span>
+      </div>
+      <span id="updatedText"></span>
+    </div>
+
+    <section id="setupPanel" class="setup hidden">
+      <h2>One connection step left</h2>
+      <p>The page is installed, but it needs the Google Apps Script web-app URL that exposes the already-working contest sheet.</p>
+      <p>After that URL is placed in <code>config.js</code>, this page refreshes automatically every 30 seconds.</p>
+    </section>
+
+    <section id="liveContent" class="hidden">
+      <div class="leaderboard" id="leaderboard"></div>
+      <div class="cards" id="cards"></div>
+    </section>
+
+    <div class="footer">
+      <a class="pdga-link" href="https://www.pdga.com/live/event/97344/MPO/scores?round=1" target="_blank" rel="noopener">View event on PDGA Live ↗</a>
+    </div>
+  </main>
+
+  <script src="./config.js"></script>
+  <script>
+    (() => {
+      const API_URL = String(window.PDGA_PICKS_API_URL || "").trim();
+      const REFRESH_MS = 30000;
+      let timeoutId = null;
+      let jsonpScript = null;
+      let loading = false;
+      let lastPayload = null;
+
+      const $ = (id) => document.getElementById(id);
+      const setupPanel = $("setupPanel");
+      const liveContent = $("liveContent");
+      const statusText = $("statusText");
+      const statusDot = $("statusDot");
+      const updatedText = $("updatedText");
+
+      const savedTheme = localStorage.getItem("pdga-picks-theme");
+      if (savedTheme === "dark") document.documentElement.dataset.theme = "dark";
+      if (!savedTheme && matchMedia("(prefers-color-scheme: dark)").matches) document.documentElement.dataset.theme = "dark";
+
+      $("themeBtn").addEventListener("click", () => {
+        const dark = document.documentElement.dataset.theme === "dark";
+        if (dark) delete document.documentElement.dataset.theme;
+        else document.documentElement.dataset.theme = "dark";
+        localStorage.setItem("pdga-picks-theme", dark ? "light" : "dark");
+      });
+
+      $("refreshBtn").addEventListener("click", () => loadData(true));
+
+      function score(value) {
+        if (value === null || value === undefined || value === "") return "—";
+        const n = Number(value);
+        if (!Number.isFinite(n)) return String(value);
+        if (n === 0) return "E";
+        return n > 0 ? "+" + n : String(n);
+      }
+
+      function esc(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+      }
+
+      function niceTime(value) {
+        const d = value ? new Date(value) : null;
+        if (!d || Number.isNaN(d.getTime())) return "";
+        return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" }).format(d);
+      }
+
+      function isNum(v) {
+        return typeof v === "number" && Number.isFinite(v);
+      }
+
+      function rankStandings(standings) {
+        const rows = [...standings].sort((a,b) => {
+          if (!isNum(a.contestTotal) && !isNum(b.contestTotal)) return 0;
+          if (!isNum(a.contestTotal)) return 1;
+          if (!isNum(b.contestTotal)) return -1;
+          return a.contestTotal - b.contestTotal;
+        });
+        rows.forEach((row, i) => {
+          if (!isNum(row.contestTotal)) row.rank = "";
+          else row.rank = 1 + rows.filter(x => isNum(x.contestTotal) && x.contestTotal < row.contestTotal).length;
+        });
+        return rows;
+      }
+
+      function playerStatus(p) {
+        if (p.thru === "F") return "F";
+        if (p.thru && p.thru !== "-") return "Thru " + p.thru;
+        return "Not started";
+      }
+
+      function render(payload) {
+        lastPayload = payload;
+        const standings = rankStandings(Array.isArray(payload.standings) ? payload.standings : []);
+        const players = Array.isArray(payload.players) ? payload.players : [];
+        const currentRound = Number(payload.currentRound || players.find(p => p.currentRound)?.currentRound || 1);
+
+        setupPanel.classList.add("hidden");
+        liveContent.classList.remove("hidden");
+
+        statusDot.className = "dot live";
+        statusText.textContent = "Live · Round " + currentRound;
+        updatedText.textContent = payload.updatedAt ? "Updated " + niceTime(payload.updatedAt) : "";
+
+        $("leaderboard").innerHTML = standings.map(s => `
+          <div class="leader">
+            <div class="rank-badge">${esc(s.rank || "—")}</div>
+            <div>
+              <div class="leader-name">${esc(s.entrant)}</div>
+              <div class="leader-drop">${s.droppedPlayer ? "Drop: " + esc(s.droppedPlayer) : ""}</div>
+            </div>
+            <div class="leader-total">${score(s.contestTotal)}</div>
+          </div>
+        `).join("");
+
+        $("cards").innerHTML = standings.map(s => {
+          const group = players
+            .filter(p => p.entrant === s.entrant)
+            .sort((a,b) => {
+              if (!isNum(a.total) && !isNum(b.total)) return 0;
+              if (!isNum(a.total)) return 1;
+              if (!isNum(b.total)) return -1;
+              return a.total - b.total;
+            });
+
+          const playerHtml = group.map(p => {
+            const dropped = p.drop === true || String(p.drop || "").toUpperCase() === "DROP" || p.player === s.droppedPlayer;
+            const rounds = Array.from({length:5}, (_,i) => {
+              const val = Array.isArray(p.rounds) ? p.rounds[i] : p["r" + (i+1)];
+              return `<div class="round"><span class="round-label">R${i+1}</span><span class="round-score">${score(val)}</span></div>`;
+            }).join("");
+            return `
+              <div class="player ${dropped ? "drop" : ""}">
+                <div class="player-main">
+                  <div>
+                    <div class="player-name">${esc(p.player)}</div>
+                    <div class="player-meta">
+                      <span class="pill">${esc(playerStatus(p))}</span>
+                      ${p.place ? `<span class="pill">Place ${esc(p.place)}</span>` : ""}
+                      ${dropped ? '<span class="pill drop-pill">DROP</span>' : ""}
+                    </div>
+                  </div>
+                  <div class="player-total">${score(p.total)}</div>
+                </div>
+                <div class="rounds">${rounds}</div>
+              </div>
+            `;
+          }).join("");
+
+          return `
+            <article class="entrant-card">
+              <div class="entrant-head">
+                <div class="entrant-title">
+                  <span class="entrant-rank">#${esc(s.rank || "—")}</span>
+                  <span class="entrant-name">${esc(s.entrant)}</span>
+                </div>
+                <span class="entrant-score">${score(s.contestTotal)}</span>
+              </div>
+              <div class="drop-note">${s.droppedPlayer ? "Dropped: " + esc(s.droppedPlayer) + " (" + score(s.droppedScore) + ")" : "Waiting for all five player scores"}</div>
+              <div class="players">${playerHtml}</div>
+            </article>
+          `;
+        }).join("");
+      }
+
+      window.__pdgaPicksReceive = (payload) => {
+        loading = false;
+        if (jsonpScript) { jsonpScript.remove(); jsonpScript = null; }
+        if (!payload || payload.ok === false) {
+          showError(payload?.error || "Live data unavailable");
+          schedule();
+          return;
+        }
+        render(payload);
+        schedule();
+      };
+
+      function showError(message) {
+        statusDot.className = "dot error";
+        statusText.textContent = message || "Unable to refresh";
+        if (!lastPayload) {
+          liveContent.classList.add("hidden");
+          setupPanel.classList.remove("hidden");
+        }
+      }
+
+      function schedule() {
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => loadData(false), REFRESH_MS);
+      }
+
+      function loadData(manual) {
+        if (!API_URL) {
+          statusDot.className = "dot";
+          statusText.textContent = "Live data connection not configured";
+          setupPanel.classList.remove("hidden");
+          liveContent.classList.add("hidden");
+          return;
+        }
+        if (loading) return;
+        loading = true;
+        clearTimeout(timeoutId);
+        statusText.textContent = manual ? "Refreshing…" : "Updating…";
+
+        if (jsonpScript) jsonpScript.remove();
+        jsonpScript = document.createElement("script");
+        const sep = API_URL.includes("?") ? "&" : "?";
+        jsonpScript.src = API_URL + sep + "callback=__pdgaPicksReceive&_=" + Date.now();
+        jsonpScript.onerror = () => {
+          loading = false;
+          showError("Could not reach live data");
+          schedule();
+        };
+        document.head.appendChild(jsonpScript);
+
+        setTimeout(() => {
+          if (!loading) return;
+          loading = false;
+          showError("Live data timed out");
+          schedule();
+        }, 12000);
+      }
+
+      loadData(false);
+    })();
+  </script>
+</body>
+</html>
