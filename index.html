@@ -34,12 +34,6 @@
     .dot.error{background:#ef4444;box-shadow:0 0 0 4px rgba(239,68,68,.13)}
     #statusText{font-weight:700;font-size:.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     #updatedText{color:var(--muted);font-size:.79rem;white-space:nowrap}
-    .leaderboard{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
-    .leader{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;box-shadow:var(--shadow);display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px}
-    .rank-badge{width:34px;height:34px;border-radius:50%;background:var(--soft);display:grid;place-items:center;font-weight:900}
-    .leader-name{font-weight:800}
-    .leader-drop{font-size:.76rem;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .leader-total{font-size:1.55rem;font-weight:900;letter-spacing:-.035em}
     .cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
     .entrant-card{background:var(--card);border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:var(--shadow)}
     .entrant-card > summary{list-style:none;cursor:pointer}
@@ -76,7 +70,7 @@
     .footer{display:flex;justify-content:center;padding:18px 0 4px}
     .pdga-link{color:var(--accent);font-size:.84rem;font-weight:750}
     .hidden{display:none!important}
-    @media(max-width:860px){.cards{grid-template-columns:1fr}.leaderboard{grid-template-columns:1fr 1fr 1fr}.wrap{padding:12px}.entrant-card{border-radius:15px}.entrant-chevron{display:inline-block}.entrant-card[open] .entrant-chevron{transform:rotate(180deg)}}
+    @media(max-width:860px){.cards{grid-template-columns:1fr}.wrap{padding:12px}.entrant-card{border-radius:15px}.entrant-chevron{display:inline-block}.entrant-card[open] .entrant-chevron{transform:rotate(180deg)}}
     @media(max-width:560px){
       .wrap{padding:10px}
       .topbar{align-items:center;margin-bottom:11px}
@@ -85,13 +79,7 @@
       .icon-btn{padding:8px 9px;border-radius:10px}
       .statusbar{padding:9px 10px;border-radius:12px}
       #updatedText{display:none}
-      .leaderboard{gap:6px;margin-bottom:10px}
-      .leader{grid-template-columns:1fr;padding:9px;text-align:center;gap:2px;border-radius:12px}
-      .rank-badge{display:none}
-      .leader-name{font-size:.78rem}
-      .leader-drop{display:none}
-      .leader-total{font-size:1.18rem}
-      .cards{gap:10px}
+                  .cards{gap:10px}
       .entrant-head{padding:12px}
       .entrant-score{font-size:1.35rem}
       .drop-note{padding:7px 12px}
@@ -125,7 +113,6 @@
     </section>
 
     <section id="liveContent" class="hidden">
-      <div class="leaderboard" id="leaderboard"></div>
       <div class="cards" id="cards"></div>
     </section>
 
@@ -291,17 +278,6 @@
         statusDot.className = "dot live";
         statusText.textContent = "Live · Round " + currentRound;
         updatedText.textContent = payload.updatedAt ? "Updated " + niceTime(payload.updatedAt) : "";
-
-        $("leaderboard").innerHTML = standings.map(s => `
-          <div class="leader">
-            <div class="rank-badge">${esc(s.rank || "—")}</div>
-            <div>
-              <div class="leader-name">${esc(s.entrant)}</div>
-              <div class="leader-drop">${s.droppedPlayer ? "Drop: " + esc(s.droppedPlayer) : ""}</div>
-            </div>
-            <div class="leader-total">${score(s.contestTotal)}</div>
-          </div>
-        `).join("");
 
         $("cards").innerHTML = standings.map(s => {
           const group = s._group;
