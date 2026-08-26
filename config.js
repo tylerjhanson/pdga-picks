@@ -1,0 +1,1 @@
+window.PDGA_PICKS_API_URL = "";
