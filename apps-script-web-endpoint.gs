@@ -13,9 +13,22 @@ function doGet(e) {
     ? requested
     : '__pdgaPicksReceive';
 
+  let refreshWarning = '';
+
+  // Keep the public webpage much closer to PDGA Live than the normal
+  // 1-minute Sheet trigger. Across all viewers, allow at most one fresh
+  // PDGA pull every 20 seconds.
+  try {
+    refreshContestForWeb_();
+  } catch (error) {
+    // If PDGA has a temporary problem, still return the latest Sheet snapshot.
+    refreshWarning = error && error.message ? error.message : String(error);
+  }
+
   let payload;
   try {
     payload = getContestWebPayload_();
+    if (refreshWarning) payload.refreshWarning = refreshWarning;
   } catch (error) {
     payload = {
       ok: false,
@@ -26,6 +39,31 @@ function doGet(e) {
   return ContentService
     .createTextOutput(callback + '(' + JSON.stringify(payload) + ');')
     .setMimeType(ContentService.MimeType.JAVASCRIPT);
+}
+
+function refreshContestForWeb_() {
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'pdga_picks_web_refresh';
+
+  if (cache.get(cacheKey)) return;
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(1500)) return;
+
+  try {
+    // Check again after obtaining the lock because another viewer may have
+    // completed a refresh while this request was waiting.
+    if (cache.get(cacheKey)) return;
+
+    if (typeof refreshScores !== 'function') {
+      throw new Error('refreshScores() was not found in this Apps Script project.');
+    }
+
+    refreshScores();
+    cache.put(cacheKey, String(Date.now()), 20);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function getContestWebPayload_() {
