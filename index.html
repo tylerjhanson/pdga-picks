@@ -42,6 +42,12 @@
     .leader-total{font-size:1.55rem;font-weight:900;letter-spacing:-.035em}
     .cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
     .entrant-card{background:var(--card);border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:var(--shadow)}
+    .entrant-card > summary{list-style:none;cursor:pointer}
+    .entrant-card > summary::-webkit-details-marker{display:none}
+    .entrant-card > summary::marker{content:""}
+    .entrant-score-wrap{display:flex;align-items:center;gap:9px}
+    .entrant-chevron{display:none;color:var(--muted);font-size:1rem;transition:transform .15s ease}
+    .entrant-card:not([open]) .entrant-head{border-bottom:0}
     .entrant-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 15px 12px;border-bottom:1px solid var(--line)}
     .entrant-title{display:flex;align-items:center;gap:9px;min-width:0}
     .entrant-rank{font-size:.78rem;font-weight:900;background:var(--soft);border-radius:999px;padding:5px 8px}
@@ -70,7 +76,7 @@
     .footer{display:flex;justify-content:center;padding:18px 0 4px}
     .pdga-link{color:var(--accent);font-size:.84rem;font-weight:750}
     .hidden{display:none!important}
-    @media(max-width:860px){.cards{grid-template-columns:1fr}.leaderboard{grid-template-columns:1fr 1fr 1fr}.wrap{padding:12px}.entrant-card{border-radius:15px}}
+    @media(max-width:860px){.cards{grid-template-columns:1fr}.leaderboard{grid-template-columns:1fr 1fr 1fr}.wrap{padding:12px}.entrant-card{border-radius:15px}.entrant-chevron{display:inline-block}.entrant-card[open] .entrant-chevron{transform:rotate(180deg)}}
     @media(max-width:560px){
       .wrap{padding:10px}
       .topbar{align-items:center;margin-bottom:11px}
@@ -128,7 +134,6 @@
     </div>
   </main>
 
-  <script src="./config.js"></script>
   <script>
     (() => {
       const API_URL = "https://script.google.com/macros/s/AKfycby8qL3TJuXLvHPNPmNEJ7rP2tqBa8ywyi-el6z8LltVksyryIkVO81DOelj3O3rmQ/exec";
@@ -202,11 +207,83 @@
         return "Not started";
       }
 
+      const mobileCardMedia = window.matchMedia("(max-width: 860px)");
+      const mobileOpenEntrants = new Set();
+
+      function getSortedGroup(players, entrant) {
+        return players
+          .filter(p => p.entrant === entrant)
+          .sort((a, b) => {
+            if (!isNum(a.total) && !isNum(b.total)) return 0;
+            if (!isNum(a.total)) return 1;
+            if (!isNum(b.total)) return -1;
+            return a.total - b.total;
+          });
+      }
+
+      function getVisualDrop(group) {
+        if (group.length !== 5 || !group.every(p => isNum(p.total))) return null;
+
+        // Players are already sorted best-to-worst. If the worst score is tied,
+        // the visually last tied player is therefore the one dropped.
+        return group[group.length - 1];
+      }
+
+      function rememberOpenCards() {
+        if (!mobileCardMedia.matches) return;
+
+        document.querySelectorAll("details.entrant-card").forEach(card => {
+          const entrant = card.dataset.entrant;
+          if (!entrant) return;
+          if (card.open) mobileOpenEntrants.add(entrant);
+          else mobileOpenEntrants.delete(entrant);
+        });
+      }
+
+      function applyCardDisclosureBehavior() {
+        document.querySelectorAll("details.entrant-card").forEach(card => {
+          const entrant = card.dataset.entrant;
+
+          if (mobileCardMedia.matches) {
+            // Closed by default on mobile; preserve a user's open cards through refreshes.
+            card.open = mobileOpenEntrants.has(entrant);
+          } else {
+            // Desktop stays fully expanded.
+            card.open = true;
+          }
+
+          card.addEventListener("toggle", () => {
+            if (!mobileCardMedia.matches || !entrant) return;
+            if (card.open) mobileOpenEntrants.add(entrant);
+            else mobileOpenEntrants.delete(entrant);
+          });
+        });
+      }
+
       function render(payload) {
+        rememberOpenCards();
         lastPayload = payload;
-        const standings = rankStandings(Array.isArray(payload.standings) ? payload.standings : []);
+
         const players = Array.isArray(payload.players) ? payload.players : [];
-        const currentRound = Number(payload.currentRound || players.find(p => p.currentRound)?.currentRound || 1);
+        let standings = rankStandings(Array.isArray(payload.standings) ? payload.standings : []);
+        const currentRound = Number(
+          payload.currentRound ||
+          players.find(p => p.currentRound)?.currentRound ||
+          1
+        );
+
+        // Recalculate only the visual drop on the frontend so tied worst scores
+        // always drop the player that appears last in that person's sorted list.
+        standings = standings.map(s => {
+          const group = getSortedGroup(players, s.entrant);
+          const dropped = getVisualDrop(group);
+          return {
+            ...s,
+            _group: group,
+            droppedPlayer: dropped ? dropped.player : "",
+            droppedScore: dropped ? dropped.total : null
+          };
+        });
 
         setupPanel.classList.add("hidden");
         liveContent.classList.remove("hidden");
@@ -227,21 +304,16 @@
         `).join("");
 
         $("cards").innerHTML = standings.map(s => {
-          const group = players
-            .filter(p => p.entrant === s.entrant)
-            .sort((a,b) => {
-              if (!isNum(a.total) && !isNum(b.total)) return 0;
-              if (!isNum(a.total)) return 1;
-              if (!isNum(b.total)) return -1;
-              return a.total - b.total;
-            });
+          const group = s._group;
+          const droppedPlayer = getVisualDrop(group);
 
           const playerHtml = group.map(p => {
-            const dropped = p.drop === true || String(p.drop || "").toUpperCase() === "DROP" || p.player === s.droppedPlayer;
+            const dropped = droppedPlayer && p === droppedPlayer;
             const rounds = Array.from({length:5}, (_,i) => {
               const val = Array.isArray(p.rounds) ? p.rounds[i] : p["r" + (i+1)];
               return `<div class="round"><span class="round-label">R${i+1}</span><span class="round-score">${score(val)}</span></div>`;
             }).join("");
+
             return `
               <div class="player ${dropped ? "drop" : ""}">
                 <div class="player-main">
@@ -260,21 +332,41 @@
             `;
           }).join("");
 
+          const dropText = droppedPlayer
+            ? `Dropped: ${esc(droppedPlayer.player)} (${score(droppedPlayer.total)})`
+            : "Waiting for all five player scores";
+
           return `
-            <article class="entrant-card">
-              <div class="entrant-head">
+            <details class="entrant-card" data-entrant="${esc(s.entrant)}">
+              <summary class="entrant-head">
                 <div class="entrant-title">
                   <span class="entrant-rank">#${esc(s.rank || "—")}</span>
                   <span class="entrant-name">${esc(s.entrant)}</span>
                 </div>
-                <span class="entrant-score">${score(s.contestTotal)}</span>
-              </div>
-              <div class="drop-note">${s.droppedPlayer ? "Dropped: " + esc(s.droppedPlayer) + " (" + score(s.droppedScore) + ")" : "Waiting for all five player scores"}</div>
+                <div class="entrant-score-wrap">
+                  <span class="entrant-score">${score(s.contestTotal)}</span>
+                  <span class="entrant-chevron" aria-hidden="true">▼</span>
+                </div>
+              </summary>
+              <div class="drop-note">${dropText}</div>
               <div class="players">${playerHtml}</div>
-            </article>
+            </details>
           `;
         }).join("");
+
+        applyCardDisclosureBehavior();
       }
+
+      mobileCardMedia.addEventListener("change", () => {
+        document.querySelectorAll("details.entrant-card").forEach(card => {
+          if (mobileCardMedia.matches) {
+            card.open = false;
+            mobileOpenEntrants.clear();
+          } else {
+            card.open = true;
+          }
+        });
+      });
 
       window.__pdgaPicksReceive = (payload) => {
         loading = false;
