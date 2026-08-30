@@ -46,7 +46,7 @@ function doGet(e) {
   } catch (error) {
     payload = {
       ok: false,
-      bridgeVersion: 'direct-v3',
+      bridgeVersion: 'direct-v4',
       error: error && error.message ? error.message : String(error)
     };
   }
@@ -58,7 +58,7 @@ function doGet(e) {
 
 function web8_getPayload_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_direct_v3';
+  const cacheKey = 'pdga_picks_direct_v4';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -316,7 +316,7 @@ function web8_getPayload_() {
 
     const payload = {
       ok: true,
-      bridgeVersion: 'direct-v3',
+      bridgeVersion: 'direct-v4',
       eventId: WEB8_EVENT_ID,
       division: WEB8_DIVISION,
       currentRound: currentRound,
@@ -350,6 +350,9 @@ function web8_getPayload_() {
           kyleFinalsMatched: !!(kyleDirectFinals || kyleReferenceFinals),
           kyleReferenceTokens: kyleR4
             ? web8_collectIdentityTokens_(kyleR4).slice(0, 10)
+            : [],
+          kyleReferenceTokenCounts: kyleR4
+            ? web8_referenceTokenDiagnostics_(roundScores[5], kyleR4)
             : []
         };
       })()
@@ -597,16 +600,44 @@ function web8_findPlayerByReference_(scores, referencePlayer) {
   if (!referencePlayer) return null;
 
   const referenceTokens = web8_collectIdentityTokens_(referencePlayer);
-
   if (!referenceTokens.length) return null;
 
-  return (scores || []).find(candidate => {
-    const candidateTokens = web8_collectIdentityTokens_(candidate);
+  const candidates = (scores || []).map(player => ({
+    player: player,
+    tokens: web8_collectIdentityTokens_(player)
+  }));
 
-    return candidateTokens.some(token =>
-      referenceTokens.indexOf(token) !== -1
+  // Only trust a token if it appears in EXACTLY ONE Finals record.
+  // This prevents shared/event-level IDs from mapping every pick to
+  // the same Finals player.
+  for (let i = 0; i < referenceTokens.length; i++) {
+    const token = referenceTokens[i];
+    const matches = candidates.filter(candidate =>
+      candidate.tokens.indexOf(token) !== -1
     );
-  }) || null;
+
+    if (matches.length === 1) {
+      return matches[0].player;
+    }
+  }
+
+  return null;
+}
+
+function web8_referenceTokenDiagnostics_(scores, referencePlayer) {
+  if (!referencePlayer) return [];
+
+  const referenceTokens = web8_collectIdentityTokens_(referencePlayer);
+  const candidates = (scores || []).map(player =>
+    web8_collectIdentityTokens_(player)
+  );
+
+  return referenceTokens.slice(0, 12).map(token => ({
+    token: token,
+    finalsMatches: candidates.filter(tokens =>
+      tokens.indexOf(token) !== -1
+    ).length
+  }));
 }
 
 function web8_collectIdentityTokens_(value) {
