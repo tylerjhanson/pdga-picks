@@ -46,7 +46,7 @@ function doGet(e) {
   } catch (error) {
     payload = {
       ok: false,
-      bridgeVersion: 'direct-v4',
+      bridgeVersion: 'direct-v5',
       error: error && error.message ? error.message : String(error)
     };
   }
@@ -58,7 +58,7 @@ function doGet(e) {
 
 function web8_getPayload_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_direct_v4';
+  const cacheKey = 'pdga_picks_direct_v5';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -76,6 +76,7 @@ function web8_getPayload_() {
 
   try {
     const roundScores = {};
+    const roundRaw = {};
     const diagnostics = [];
 
     // Contest R1-R4 map normally. Contest R5 is PDGA's special Finals/API 12.
@@ -85,6 +86,7 @@ function web8_getPayload_() {
       const scores = web8_extractScores_(fetched.json);
 
       roundScores[contestRound] = scores;
+      roundRaw[contestRound] = fetched.json;
 
       diagnostics.push({
         contestRound: contestRound,
@@ -108,6 +110,10 @@ function web8_getPayload_() {
       draftOrder[pick.entrant + '|' + pick.player] = i;
     });
 
+    const finalsAssignments = currentRound === 5
+      ? web8_buildFinalsAssignments_(roundScores[5], roundRaw[5], WEB8_PICKS)
+      : {};
+
     const players = WEB8_PICKS.map((pick, order) => {
       const rounds = [null, null, null, null, null];
       let latestFound = null;
@@ -116,17 +122,11 @@ function web8_getPayload_() {
       let hasRoundScore = false;
 
       for (let round = 1; round <= currentRound; round++) {
-        let found = web8_findPlayer_(roundScores[round], pick);
-
-        // Finals can omit/restructure the normal name + PDGA fields.
-        // If direct matching fails in R5, map the player from their known
-        // Round 4 record using stable internal identity fields.
-        if (!found && round === 5) {
-          const round4Reference = web8_findPlayer_(roundScores[4], pick);
-          if (round4Reference) {
-            found = web8_findPlayerByReference_(roundScores[5], round4Reference);
-          }
-        }
+        let found = round === 5
+          ? (finalsAssignments[pick.pdga]
+              ? finalsAssignments[pick.pdga].player
+              : null)
+          : web8_findPlayer_(roundScores[round], pick);
 
         if (!found) continue;
 
@@ -316,7 +316,7 @@ function web8_getPayload_() {
 
     const payload = {
       ok: true,
-      bridgeVersion: 'direct-v4',
+      bridgeVersion: 'direct-v5',
       eventId: WEB8_EVENT_ID,
       division: WEB8_DIVISION,
       currentRound: currentRound,
@@ -335,25 +335,12 @@ function web8_getPayload_() {
       })),
       feedDiagnostics: diagnostics,
       matchDiagnostics: (() => {
-        const kylePick = WEB8_PICKS.find(p => p.pdga === '85132');
-        const kyleR4 = web8_findPlayer_(roundScores[4], kylePick);
-        const kyleDirectFinals = web8_findPlayer_(roundScores[5], kylePick);
-        const kyleReferenceFinals =
-          !kyleDirectFinals && kyleR4
-            ? web8_findPlayerByReference_(roundScores[5], kyleR4)
-            : null;
-
+        const kyleAssignment = finalsAssignments['85132'] || null;
         return {
-          kyleRound4Matched: !!kyleR4,
-          kyleDirectFinalsMatched: !!kyleDirectFinals,
-          kyleReferenceFinalsMatched: !!kyleReferenceFinals,
-          kyleFinalsMatched: !!(kyleDirectFinals || kyleReferenceFinals),
-          kyleReferenceTokens: kyleR4
-            ? web8_collectIdentityTokens_(kyleR4).slice(0, 10)
-            : [],
-          kyleReferenceTokenCounts: kyleR4
-            ? web8_referenceTokenDiagnostics_(roundScores[5], kyleR4)
-            : []
+          kyleFinalsMatched: !!kyleAssignment,
+          kyleMethod: kyleAssignment ? kyleAssignment.method : '',
+          kyleFinalsIndex: kyleAssignment ? kyleAssignment.index : null,
+          assignedFinalists: Object.keys(finalsAssignments).length
         };
       })()
     };
@@ -594,6 +581,323 @@ function web8_collectScalarValues_(value, out, depth) {
       web8_collectScalarValues_(value[key], out, depth + 1)
     );
   }
+}
+
+function web8_buildFinalsAssignments_(scores, rawRoot, picks) {
+  const assignments = {};
+  const used = {};
+  const scoreList = scores || [];
+
+  function assign(pick, index, method) {
+    if (!pick || index === null || index === undefined) return false;
+    if (index < 0 || index >= scoreList.length) return false;
+    if (used[index]) return false;
+    if (assignments[pick.pdga]) return false;
+
+    assignments[pick.pdga] = {
+      player: scoreList[index],
+      index: index,
+      method: method
+    };
+    used[index] = true;
+    return true;
+  }
+
+  // 1) Direct identity, if any Finals row happens to expose it.
+  picks.forEach(pick => {
+    const matches = [];
+
+    scoreList.forEach((row, index) => {
+      if (web8_recordMatchesPick_(row, pick)) matches.push(index);
+    });
+
+    if (matches.length === 1) {
+      assign(pick, matches[0], 'direct-score');
+    }
+  });
+
+  // 2) Look for a parallel identity array with exactly the same 124-row
+  // length as data.scores. PDGA Finals can separate identity from scores.
+  const arrays = [];
+  web8_collectObjectArrays_(rawRoot, arrays, 0);
+
+  arrays
+    .filter(candidate =>
+      candidate.array !== scoreList &&
+      candidate.array.length === scoreList.length &&
+      candidate.array.length > 0
+    )
+    .forEach(candidate => {
+      picks.forEach(pick => {
+        if (assignments[pick.pdga]) return;
+
+        const matches = [];
+
+        candidate.array.forEach((row, index) => {
+          if (web8_recordMatchesPick_(row, pick)) matches.push(index);
+        });
+
+        if (matches.length === 1) {
+          assign(pick, matches[0], 'parallel-array:' + candidate.path);
+        }
+      });
+    });
+
+  // 3) Generic identity-object join. Find objects anywhere in the response
+  // that contain the player's name/PDGA number, then find a scalar ID/value
+  // shared with exactly one Finals score row.
+  picks.forEach(pick => {
+    if (assignments[pick.pdga]) return;
+
+    const identityObjects = [];
+    web8_collectMatchingObjects_(rawRoot, pick, identityObjects, 0, '$');
+
+    const candidateIndexes = {};
+
+    identityObjects.forEach(match => {
+      const tokens = web8_collectJoinTokens_(match.object, match.path);
+
+      tokens.forEach(token => {
+        const matchingScoreIndexes = [];
+
+        scoreList.forEach((row, index) => {
+          if (used[index]) return;
+          if (web8_objectHasJoinToken_(row, token)) {
+            matchingScoreIndexes.push(index);
+          }
+        });
+
+        if (matchingScoreIndexes.length === 1) {
+          const index = matchingScoreIndexes[0];
+          candidateIndexes[index] =
+            (candidateIndexes[index] || 0) + 1;
+        }
+      });
+    });
+
+    const ranked = Object.keys(candidateIndexes)
+      .map(index => ({
+        index: Number(index),
+        strength: candidateIndexes[index]
+      }))
+      .sort((a, b) => b.strength - a.strength);
+
+    // Require at least one unique join token. Because we also enforce
+    // one-to-one score-row usage, the same Finals row cannot be assigned
+    // to multiple picks.
+    if (ranked.length && ranked[0].strength >= 1) {
+      assign(pick, ranked[0].index, 'unique-token');
+    }
+  });
+
+  return assignments;
+}
+
+function web8_recordMatchesPick_(value, pick) {
+  if (!value || !pick) return false;
+
+  const aliases = [pick.player]
+    .concat(pick.aliases || [])
+    .filter(Boolean);
+
+  const scalars = [];
+  web8_collectScalarValues_(value, scalars, 0);
+
+  const wantedPdga = String(pick.pdga || '').replace(/\D/g, '');
+
+  if (
+    wantedPdga &&
+    scalars.some(item =>
+      String(item == null ? '' : item).replace(/\D/g, '') === wantedPdga
+    )
+  ) {
+    return true;
+  }
+
+  return scalars.some(item =>
+    aliases.some(alias => web8_namesEquivalent_(item, alias))
+  );
+}
+
+function web8_collectObjectArrays_(value, out, depth, path) {
+  path = path || '$';
+  if (depth > 8 || value === null || value === undefined) return;
+
+  if (Array.isArray(value)) {
+    const objects = value.filter(item =>
+      item && typeof item === 'object' && !Array.isArray(item)
+    );
+
+    if (objects.length === value.length && value.length) {
+      out.push({ array: value, path: path });
+    }
+
+    value.forEach((item, index) =>
+      web8_collectObjectArrays_(
+        item,
+        out,
+        depth + 1,
+        path + '[' + index + ']'
+      )
+    );
+    return;
+  }
+
+  if (typeof value === 'object') {
+    Object.keys(value).forEach(key =>
+      web8_collectObjectArrays_(
+        value[key],
+        out,
+        depth + 1,
+        path + '.' + key
+      )
+    );
+  }
+}
+
+function web8_collectMatchingObjects_(value, pick, out, depth, path) {
+  if (depth > 8 || value === null || value === undefined) return;
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      web8_collectMatchingObjects_(
+        item,
+        pick,
+        out,
+        depth + 1,
+        path + '[' + index + ']'
+      )
+    );
+    return;
+  }
+
+  if (typeof value !== 'object') return;
+
+  if (web8_recordMatchesPick_(value, pick)) {
+    out.push({ object: value, path: path });
+  }
+
+  Object.keys(value).forEach(key =>
+    web8_collectMatchingObjects_(
+      value[key],
+      pick,
+      out,
+      depth + 1,
+      path + '.' + key
+    )
+  );
+}
+
+function web8_collectJoinTokens_(value, path) {
+  const tokens = [];
+
+  function walk(node, depth, parentKey) {
+    if (depth > 6 || node === null || node === undefined) return;
+
+    if (typeof node === 'string' || typeof node === 'number') {
+      const key = web8_normalizeKey_(parentKey || '');
+      const stringValue = String(node).trim();
+
+      // Ignore booleans, tiny counters, scores, places and common flags.
+      if (!stringValue) return;
+      if (
+        key.indexOf('score') !== -1 ||
+        key.indexOf('par') !== -1 ||
+        key.indexOf('place') !== -1 ||
+        key.indexOf('played') !== -1 ||
+        key.indexOf('hole') !== -1 ||
+        key.indexOf('round') !== -1 ||
+        key.indexOf('completed') !== -1 ||
+        key.indexOf('haspdga') !== -1
+      ) {
+        return;
+      }
+
+      const numeric = /^-?\d+(?:\.\d+)?$/.test(stringValue);
+      if (numeric && Math.abs(Number(stringValue)) < 1000) return;
+      if (!numeric && stringValue.length < 4) return;
+
+      const token = {
+        key: key,
+        value: stringValue.toLowerCase()
+      };
+
+      if (
+        !tokens.some(existing =>
+          existing.key === token.key &&
+          existing.value === token.value
+        )
+      ) {
+        tokens.push(token);
+      }
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      node.slice(0, 100).forEach(item =>
+        walk(item, depth + 1, parentKey)
+      );
+      return;
+    }
+
+    if (typeof node === 'object') {
+      Object.keys(node).forEach(key =>
+        walk(node[key], depth + 1, key)
+      );
+    }
+  }
+
+  walk(value, 0, path || '');
+  return tokens;
+}
+
+function web8_objectHasJoinToken_(value, token) {
+  let found = false;
+
+  function walk(node, depth, parentKey) {
+    if (found || depth > 6 || node === null || node === undefined) return;
+
+    if (typeof node === 'string' || typeof node === 'number') {
+      const key = web8_normalizeKey_(parentKey || '');
+      const stringValue = String(node).trim().toLowerCase();
+
+      // Prefer same normalized field name, but allow an ID value to move
+      // between differently named ID fields in Finals.
+      const idish =
+        token.key.indexOf('id') !== -1 ||
+        token.key.indexOf('num') !== -1 ||
+        token.key.indexOf('member') !== -1 ||
+        token.key.indexOf('pdga') !== -1 ||
+        key.indexOf('id') !== -1 ||
+        key.indexOf('num') !== -1 ||
+        key.indexOf('member') !== -1 ||
+        key.indexOf('pdga') !== -1;
+
+      if (
+        stringValue === token.value &&
+        (key === token.key || idish)
+      ) {
+        found = true;
+      }
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      node.slice(0, 100).forEach(item =>
+        walk(item, depth + 1, parentKey)
+      );
+      return;
+    }
+
+    if (typeof node === 'object') {
+      Object.keys(node).forEach(key =>
+        walk(node[key], depth + 1, key)
+      );
+    }
+  }
+
+  walk(value, 0, '');
+  return found;
 }
 
 function web8_findPlayerByReference_(scores, referencePlayer) {
