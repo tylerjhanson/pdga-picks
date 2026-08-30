@@ -46,7 +46,7 @@ function doGet(e) {
   } catch (error) {
     payload = {
       ok: false,
-      bridgeVersion: 'direct-v8',
+      bridgeVersion: 'direct-v9',
       error: error && error.message ? error.message : String(error)
     };
   }
@@ -58,7 +58,7 @@ function doGet(e) {
 
 function web8_getPayload_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_direct_v8';
+  const cacheKey = 'pdga_picks_direct_v9';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -321,7 +321,7 @@ function web8_getPayload_() {
 
     const payload = {
       ok: true,
-      bridgeVersion: 'direct-v8',
+      bridgeVersion: 'direct-v9',
       eventId: WEB8_EVENT_ID,
       division: WEB8_DIVISION,
       currentRound: currentRound,
@@ -346,9 +346,12 @@ function web8_getPayload_() {
           kyleMethod: kyleAssignment ? kyleAssignment.method : '',
           kyleFinalsIndex: kyleAssignment ? kyleAssignment.index : null,
           assignedFinalists: Object.keys(finalsAssignments).length,
-          scoreKeys: finalsAssignments._debug
-            ? finalsAssignments._debug.scoreKeys
-            : []
+          kyleR4ResultId: finalsAssignments._debug
+            ? finalsAssignments._debug.kyleR4ResultId
+            : '',
+          kyleResultIdMatches: finalsAssignments._debug
+            ? finalsAssignments._debug.kyleResultIdMatches
+            : 0
         };
       })()
     };
@@ -596,7 +599,7 @@ function web8_buildFinalsAssignments_(scores, rawRoot, picks, round4Scores) {
   const used = {};
   const scoreList = scores || [];
 
-  function assign(pick, index, method) {
+  function assign(pick, index, method, resultId) {
     if (!pick || index === null || index === undefined) return false;
     if (index < 0 || index >= scoreList.length) return false;
     if (used[index] || assignments[pick.pdga]) return false;
@@ -604,162 +607,114 @@ function web8_buildFinalsAssignments_(scores, rawRoot, picks, round4Scores) {
     assignments[pick.pdga] = {
       player: scoreList[index],
       index: index,
-      method: method
+      method: method,
+      resultId: resultId == null ? '' : String(resultId)
     };
     used[index] = true;
     return true;
   }
 
-  // 1) Direct identity, if PDGA happens to expose it.
+  // 1) Best Finals join: ResultID is the event-result record and should
+  // remain stable for a player across rounds, even when Finals blanks
+  // Name / PDGANum / ProfileURL.
   picks.forEach(pick => {
+    const r4 = web8_findPlayer_(round4Scores || [], pick);
+    if (!r4) return;
+
+    const r4ResultId = web8_getField_(r4, [
+      'ResultID', 'resultId', 'resultID', 'result_id'
+    ]);
+
+    if (
+      r4ResultId === null ||
+      r4ResultId === undefined ||
+      String(r4ResultId) === ''
+    ) {
+      return;
+    }
+
     const matches = [];
 
     scoreList.forEach((row, index) => {
+      const finalsResultId = web8_getField_(row, [
+        'ResultID', 'resultId', 'resultID', 'result_id'
+      ]);
+
+      if (
+        finalsResultId !== null &&
+        finalsResultId !== undefined &&
+        String(finalsResultId) === String(r4ResultId)
+      ) {
+        matches.push(index);
+      }
+    });
+
+    if (matches.length === 1) {
+      assign(pick, matches[0], 'result-id', r4ResultId);
+    }
+  });
+
+  // 2) Direct identity fallback in case PDGA later restores Finals names/PDGA.
+  picks.forEach(pick => {
+    if (assignments[pick.pdga]) return;
+
+    const matches = [];
+
+    scoreList.forEach((row, index) => {
+      if (used[index]) return;
       if (web8_findPlayer_([row], pick)) matches.push(index);
     });
 
     if (matches.length === 1) {
-      assign(pick, matches[0], 'direct');
+      assign(pick, matches[0], 'direct', '');
     }
   });
 
-  // 2) Finals identity fallback:
-  // Match the Finals row to the player's Round 4 fingerprint.
-  // Finals exposes PreviousPlace / PrevRndTotal / Rating even when
-  // Name and PDGANum are unavailable.
-  picks.forEach(pick => {
-    if (assignments[pick.pdga]) return;
+  // Diagnostics for Kyle: show the R4 ResultID and how many Finals rows
+  // carry that exact same ResultID.
+  const kylePick = picks.find(p => String(p.pdga) === '85132');
+  const kyleR4 = kylePick
+    ? web8_findPlayer_(round4Scores || [], kylePick)
+    : null;
 
-    const r4 = web8_findPlayer_(round4Scores || [], pick);
-    if (!r4) return;
+  const kyleR4ResultId = kyleR4
+    ? web8_getField_(kyleR4, [
+        'ResultID', 'resultId', 'resultID', 'result_id'
+      ])
+    : null;
 
-    const r4Place = web8_plainNumber_(web8_getField_(r4, [
-      'RunningPlace', 'runningPlace', 'Place', 'place'
-    ]));
+  let kyleResultIdMatches = 0;
 
-    const r4Rating = web8_plainNumber_(web8_getField_(r4, [
-      'Rating', 'rating', 'PlayerRating', 'playerRating'
-    ]));
-
-    const r4GrandTotal = web8_plainNumber_(web8_getField_(r4, [
-      'GrandTotal', 'grandTotal',
-      'RunningTotalScore', 'runningTotalScore',
-      'TotalScore', 'totalScore'
-    ]));
-
-    const candidates = [];
-
-    scoreList.forEach((row, index) => {
-      if (used[index]) return;
-
-      const previousPlace = web8_plainNumber_(web8_getField_(row, [
-        'PreviousPlace', 'previousPlace', 'PrevPlace', 'prevPlace'
-      ]));
-
-      const rating = web8_plainNumber_(web8_getField_(row, [
-        'Rating', 'rating', 'PlayerRating', 'playerRating'
-      ]));
-
-      const prevRndTotal = web8_plainNumber_(web8_getField_(row, [
-        'PrevRndTotal', 'prevRndTotal', 'PreviousRoundTotal', 'previousRoundTotal'
-      ]));
-
-      let strength = 0;
-      let matchedPlace = false;
-      let matchedRating = false;
-      let matchedTotal = false;
+  if (
+    kyleR4ResultId !== null &&
+    kyleR4ResultId !== undefined &&
+    String(kyleR4ResultId) !== ''
+  ) {
+    scoreList.forEach(row => {
+      const finalsResultId = web8_getField_(row, [
+        'ResultID', 'resultId', 'resultID', 'result_id'
+      ]);
 
       if (
-        r4Place !== null &&
-        previousPlace !== null &&
-        r4Place === previousPlace
+        finalsResultId !== null &&
+        finalsResultId !== undefined &&
+        String(finalsResultId) === String(kyleR4ResultId)
       ) {
-        strength += 5;
-        matchedPlace = true;
-      }
-
-      if (
-        r4Rating !== null &&
-        rating !== null &&
-        r4Rating === rating
-      ) {
-        strength += 4;
-        matchedRating = true;
-      }
-
-      if (
-        r4GrandTotal !== null &&
-        prevRndTotal !== null &&
-        r4GrandTotal === prevRndTotal
-      ) {
-        strength += 6;
-        matchedTotal = true;
-      }
-
-      // Require at least two independent pieces of Round-4 identity.
-      const independentMatches =
-        (matchedPlace ? 1 : 0) +
-        (matchedRating ? 1 : 0) +
-        (matchedTotal ? 1 : 0);
-
-      if (independentMatches >= 2) {
-        candidates.push({
-          index: index,
-          strength: strength,
-          matchedPlace: matchedPlace,
-          matchedRating: matchedRating,
-          matchedTotal: matchedTotal
-        });
+        kyleResultIdMatches++;
       }
     });
-
-    candidates.sort((a, b) => b.strength - a.strength);
-
-    if (!candidates.length) return;
-
-    // Only use the best candidate if it is unambiguous.
-    if (
-      candidates.length === 1 ||
-      candidates[0].strength > candidates[1].strength
-    ) {
-      const c = candidates[0];
-      const bits = [];
-      if (c.matchedPlace) bits.push('place');
-      if (c.matchedRating) bits.push('rating');
-      if (c.matchedTotal) bits.push('total');
-
-      assign(
-        pick,
-        c.index,
-        'r4-fingerprint:' + bits.join('+')
-      );
-    }
-  });
+  }
 
   Object.defineProperty(assignments, '_debug', {
     value: {
-      scoreKeys:
-        scoreList.length && scoreList[0] && typeof scoreList[0] === 'object'
-          ? Object.keys(scoreList[0])
-          : []
+      kyleR4ResultId:
+        kyleR4ResultId == null ? '' : String(kyleR4ResultId),
+      kyleResultIdMatches: kyleResultIdMatches
     },
     enumerable: false
   });
 
   return assignments;
-}
-
-function web8_plainNumber_(value) {
-  if (value === null || value === undefined || value === '') return null;
-
-  if (typeof value === 'string') {
-    const cleaned = value.trim().replace(/^T/i, '');
-    const n = Number(cleaned);
-    return Number.isFinite(n) ? n : null;
-  }
-
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
 }
 
 
