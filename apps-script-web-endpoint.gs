@@ -46,7 +46,7 @@ function doGet(e) {
   } catch (error) {
     payload = {
       ok: false,
-      bridgeVersion: 'direct-v10',
+      bridgeVersion: 'direct-v11',
       error: error && error.message ? error.message : String(error)
     };
   }
@@ -58,7 +58,7 @@ function doGet(e) {
 
 function web8_getPayload_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_direct_v10';
+  const cacheKey = 'pdga_picks_direct_v11';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -97,50 +97,32 @@ function web8_getPayload_() {
       });
     }
 
-    // Finals: fetch both the normal Round 5 endpoint and PDGA's Finals alias (12).
-    // Round 5 may retain identity even when Round 12 blanks it.
-    const fetched5 = web8_fetchRound_(5);
-    const scores5 = web8_extractScores_(fetched5.json);
-
+    // Finals are PDGA API Round 12 for this event.
     const fetched12 = web8_fetchRound_(12);
     const scores12 = web8_extractScores_(fetched12.json);
 
-    const r5Real = web8_roundHasRealScoring_(scores5);
-    const r12Real = web8_roundHasRealScoring_(scores12);
-    const r5Identity = web8_identityRowCount_(scores5);
-    const r12Identity = web8_identityRowCount_(scores12);
+    // Optional live-delta endpoint. It can expose identity even when the
+    // full Finals leaderboard rows do not.
+    const updated12 = web8_fetchUpdatedRoundScoresSafe_(12);
+    const updatedScores12 = updated12.ok
+      ? web8_extractScores_(updated12.json)
+      : [];
 
-    const finalsChoice = web8_chooseFinalsSource_(
-      scores5,
-      scores12,
-      WEB8_PICKS
-    );
-
-    roundScores[5] = finalsChoice.scores;
-    roundRaw[5] = {
-      api5: fetched5.json,
-      api12: fetched12.json,
-      source: finalsChoice.source,
-      bridge: finalsChoice.bridge
-    };
+    roundScores[5] = scores12;
+    roundRaw[5] = fetched12.json;
 
     diagnostics.push({
       contestRound: 5,
-      apiRound: finalsChoice.source === 'api5' ? 5 : 12,
-      http: finalsChoice.source === 'api5' ? fetched5.code : fetched12.code,
-      players: finalsChoice.scores.length,
-      realScoring: web8_roundHasRealScoring_(finalsChoice.scores),
-      identityRows: web8_identityRowCount_(finalsChoice.scores),
-      api5Players: scores5.length,
-      api5RealScoring: r5Real,
-      api5IdentityRows: r5Identity,
-      api12Players: scores12.length,
-      api12RealScoring: r12Real,
-      api12IdentityRows: r12Identity,
-      finalsSource: finalsChoice.source,
-      bridgeMethod: finalsChoice.bridgeMethod
+      apiRound: 12,
+      http: fetched12.code,
+      players: scores12.length,
+      realScoring: web8_roundHasRealScoring_(scores12),
+      identityRows: web8_identityRowCount_(scores12),
+      updatedHttp: updated12.code,
+      updatedPlayers: updatedScores12.length,
+      updatedIdentityRows: web8_identityRowCount_(updatedScores12),
+      updatedRealScoring: web8_roundHasRealScoring_(updatedScores12)
     });
-
     let currentRound = 1;
 
     for (let round = 1; round <= 5; round++) {
@@ -155,7 +137,12 @@ function web8_getPayload_() {
     });
 
     const finalsAssignments = currentRound === 5
-      ? web8_buildDirectFinalsAssignments_(roundScores[5], WEB8_PICKS)
+      ? web8_buildFinalsAssignmentsV11_(
+          roundScores[5],
+          updatedScores12,
+          roundScores[4],
+          WEB8_PICKS
+        )
       : {};
 
     const players = WEB8_PICKS.map((pick, order) => {
@@ -360,7 +347,7 @@ function web8_getPayload_() {
 
     const payload = {
       ok: true,
-      bridgeVersion: 'direct-v10',
+      bridgeVersion: 'direct-v11',
       eventId: WEB8_EVENT_ID,
       division: WEB8_DIVISION,
       currentRound: currentRound,
@@ -381,20 +368,38 @@ function web8_getPayload_() {
       matchDiagnostics: (() => {
         const kyleAssignment = finalsAssignments['85132'] || null;
         const finalsDiag = diagnostics.find(d => d.contestRound === 5) || {};
+        const dbg = finalsAssignments._debug || {};
+        const kyleDbg = dbg.kyle || {};
 
         return {
           kyleFinalsMatched: !!kyleAssignment,
           kyleMethod: kyleAssignment ? kyleAssignment.method : '',
           kyleFinalsIndex: kyleAssignment ? kyleAssignment.index : null,
           assignedFinalists: Object.keys(finalsAssignments).length,
-          finalsSource: finalsDiag.finalsSource || '',
-          bridgeMethod: finalsDiag.bridgeMethod || '',
-          api5Players: finalsDiag.api5Players || 0,
-          api5RealScoring: !!finalsDiag.api5RealScoring,
-          api5IdentityRows: finalsDiag.api5IdentityRows || 0,
-          api12Players: finalsDiag.api12Players || 0,
-          api12RealScoring: !!finalsDiag.api12RealScoring,
-          api12IdentityRows: finalsDiag.api12IdentityRows || 0
+          api12Players: finalsDiag.players || 0,
+          api12IdentityRows: finalsDiag.identityRows || 0,
+          updatedHttp: finalsDiag.updatedHttp || 0,
+          updatedPlayers: finalsDiag.updatedPlayers || 0,
+          updatedIdentityRows: finalsDiag.updatedIdentityRows || 0,
+          kyleResultId: kyleDbg.resultId || '',
+          kylePlayerHttp: kyleDbg.playerHttp || 0,
+          kylePlayerCandidates: kyleDbg.playerCandidates || 0,
+          kylePlayerSelectedRound:
+            kyleDbg.selectedRound === null || kyleDbg.selectedRound === undefined
+              ? ''
+              : kyleDbg.selectedRound,
+          kylePlayerPlayed:
+            kyleDbg.played === null || kyleDbg.played === undefined
+              ? ''
+              : kyleDbg.played,
+          kylePlayerRoundToPar:
+            kyleDbg.roundToPar === null || kyleDbg.roundToPar === undefined
+              ? ''
+              : kyleDbg.roundToPar,
+          kylePlayerToPar:
+            kyleDbg.toPar === null || kyleDbg.toPar === undefined
+              ? ''
+              : kyleDbg.toPar
         };
       })()
     };
@@ -456,6 +461,228 @@ function web8_fetchRound_(apiRound) {
     json: json
   };
 }
+
+function web8_fetchUpdatedRoundScoresSafe_(apiRound) {
+  try {
+    const since = Utilities.formatDate(
+      new Date(Date.now() - 48 * 60 * 60 * 1000),
+      'America/New_York',
+      'yyyy-MM-dd HH:mm:ss'
+    );
+
+    const url =
+      'https://www.pdga.com/apps/tournament/live-api/live_results_fetch_updated_round_scores' +
+      '?TournID=' + encodeURIComponent(WEB8_EVENT_ID) +
+      '&Division=' + encodeURIComponent(WEB8_DIVISION) +
+      '&Round=' + encodeURIComponent(apiRound) +
+      '&UpdatedAfter=' + encodeURIComponent(since);
+
+    const response = UrlFetchApp.fetch(url, {
+      method: 'get',
+      followRedirects: true,
+      muteHttpExceptions: true,
+      headers: {
+        'Accept': 'application/json, text/plain, */*',
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
+          'AppleWebKit/537.36 Chrome/151 Safari/537.36',
+        'Referer':
+          'https://www.pdga.com/live/event/' +
+          WEB8_EVENT_ID + '/' + WEB8_DIVISION +
+          '/scores?round=' + apiRound,
+        'Cache-Control': 'no-cache'
+      }
+    });
+
+    const code = response.getResponseCode();
+    if (code < 200 || code >= 300) {
+      return { ok: false, code: code, json: null };
+    }
+
+    let json;
+    try {
+      json = JSON.parse(response.getContentText());
+      json = web8_unwrapJsonStrings_(json);
+    } catch (e) {
+      return { ok: false, code: code, json: null };
+    }
+
+    return { ok: true, code: code, json: json };
+  } catch (e) {
+    return { ok: false, code: 0, json: null };
+  }
+}
+
+function web8_fetchPlayerLiveBatch_(round4Scores, picks) {
+  const jobs = [];
+  const output = {};
+
+  (picks || []).forEach(pick => {
+    const r4 = web8_findPlayer_(round4Scores || [], pick);
+    const resultId = r4
+      ? web8_getField_(r4, ['ResultID', 'resultId', 'resultID', 'result_id'])
+      : null;
+
+    output[pick.pdga] = {
+      resultId: resultId == null ? '' : String(resultId),
+      http: 0,
+      candidateCount: 0,
+      record: null
+    };
+
+    if (resultId === null || resultId === undefined || String(resultId) === '') {
+      return;
+    }
+
+    jobs.push({
+      pick: pick,
+      resultId: String(resultId),
+      request: {
+        url:
+          'https://www.pdga.com/apps/tournament/live-api/live_results_fetch_player' +
+          '?ResultID=' + encodeURIComponent(resultId),
+        method: 'get',
+        followRedirects: true,
+        muteHttpExceptions: true,
+        headers: {
+          'Accept': 'application/json, text/plain, */*',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
+            'AppleWebKit/537.36 Chrome/151 Safari/537.36',
+          'Referer':
+            'https://www.pdga.com/live/event/' +
+            WEB8_EVENT_ID + '/' + WEB8_DIVISION +
+            '/scores?round=12',
+          'Cache-Control': 'no-cache'
+        }
+      }
+    });
+  });
+
+  if (!jobs.length) return output;
+
+  let responses = [];
+  try {
+    responses = UrlFetchApp.fetchAll(jobs.map(job => job.request));
+  } catch (e) {
+    return output;
+  }
+
+  jobs.forEach((job, i) => {
+    const response = responses[i];
+    if (!response) return;
+
+    const code = response.getResponseCode();
+    output[job.pick.pdga].http = code;
+
+    if (code < 200 || code >= 300) return;
+
+    let json;
+    try {
+      json = JSON.parse(response.getContentText());
+      json = web8_unwrapJsonStrings_(json);
+    } catch (e) {
+      return;
+    }
+
+    const extracted = web8_extractBestPlayerLiveRecord_(json, job.resultId);
+    output[job.pick.pdga].candidateCount = extracted.candidateCount;
+    output[job.pick.pdga].record = extracted.record;
+  });
+
+  return output;
+}
+
+function web8_extractBestPlayerLiveRecord_(root, requestedResultId) {
+  const candidates = [];
+
+  function walk(value, depth) {
+    if (depth > 8 || value === null || value === undefined) return;
+
+    if (Array.isArray(value)) {
+      value.slice(0, 300).forEach(item => walk(item, depth + 1));
+      return;
+    }
+
+    if (typeof value !== 'object') return;
+
+    const keys = Object.keys(value);
+    const roundToPar = web8_scoreNumber_(web8_getField_(value, [
+      'RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar'
+    ]));
+    const toPar = web8_scoreNumber_(web8_getField_(value, [
+      'ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar'
+    ]));
+    const played = web8_number_(web8_getField_(value, [
+      'Played', 'played', 'HolesPlayed', 'holesPlayed'
+    ]), 0);
+    const runningPlace = web8_getField_(value, [
+      'RunningPlace', 'runningPlace', 'Place', 'place'
+    ]);
+    const round = web8_number_(web8_getField_(value, [
+      'Round', 'round', 'RoundNumber', 'roundNumber'
+    ]), 0);
+    const resultId = web8_getField_(value, [
+      'ResultID', 'resultId', 'resultID', 'result_id'
+    ]);
+
+    const scoreLike =
+      roundToPar !== null ||
+      toPar !== null ||
+      played > 0 ||
+      runningPlace !== undefined;
+
+    if (scoreLike) {
+      let quality = 0;
+
+      if (round === 12) quality += 50;
+      else if (round > 4) quality += 30;
+      else if (round > 0) quality += round;
+
+      if (played > 0) quality += 12;
+      if (roundToPar !== null) quality += 10;
+      if (toPar !== null) quality += 10;
+      if (runningPlace !== undefined && runningPlace !== null && runningPlace !== '') quality += 6;
+
+      if (
+        requestedResultId &&
+        resultId !== undefined &&
+        resultId !== null &&
+        String(resultId) === String(requestedResultId)
+      ) {
+        quality += 8;
+      }
+
+      quality += Math.min(keys.length, 80) / 100;
+
+      candidates.push({
+        record: value,
+        quality: quality,
+        round: round,
+        played: played
+      });
+    }
+
+    keys.forEach(key => {
+      const child = value[key];
+      if (child && typeof child === 'object') walk(child, depth + 1);
+    });
+  }
+
+  walk(root, 0);
+
+  candidates.sort((a, b) => {
+    if (b.quality !== a.quality) return b.quality - a.quality;
+    if (b.round !== a.round) return b.round - a.round;
+    return b.played - a.played;
+  });
+
+  return {
+    record: candidates.length ? candidates[0].record : null,
+    candidateCount: candidates.length
+  };
+}
+
 
 function web8_extractScores_(root) {
   if (!root) return [];
@@ -645,170 +872,127 @@ function web8_identityRowCount_(scores) {
   }).length;
 }
 
-function web8_chooseFinalsSource_(scores5, scores12, picks) {
-  const real5 = web8_roundHasRealScoring_(scores5);
-  const real12 = web8_roundHasRealScoring_(scores12);
-  const id5 = web8_identityRowCount_(scores5);
-  const id12 = web8_identityRowCount_(scores12);
-
-  // Best case: normal API Round 5 is live and has player identity.
-  if (real5 && id5 > 0) {
-    return {
-      scores: scores5,
-      source: 'api5',
-      bridge: false,
-      bridgeMethod: 'api5-direct'
-    };
-  }
-
-  // Next best: Finals/API12 itself has usable identity.
-  if (real12 && id12 > 0) {
-    return {
-      scores: scores12,
-      source: 'api12',
-      bridge: false,
-      bridgeMethod: 'api12-direct'
-    };
-  }
-
-  // If Round 5 has identity and the two feeds have the same row count,
-  // copy only identity fields from API5 into the corresponding live API12 row.
-  if (
-    real12 &&
-    id5 > 0 &&
-    scores5.length === scores12.length &&
-    scores12.length > 0
-  ) {
-    const bridged = scores12.map((liveRow, index) =>
-      web8_mergeIdentity_(liveRow, scores5[index])
-    );
-
-    return {
-      scores: bridged,
-      source: 'api12',
-      bridge: true,
-      bridgeMethod: 'api5-index-to-api12'
-    };
-  }
-
-  // If row counts differ, try stable score-record identifiers from API5 -> API12.
-  if (real12 && id5 > 0) {
-    const bridged = scores12.map(row => Object.assign({}, row));
-    let matched = 0;
-
-    (scores5 || []).forEach(identityRow => {
-      const identity = web8_identityValues_(identityRow);
-      if (!identity.name && !identity.pdga) return;
-
-      const index = web8_findMatchingFinalsRowByIds_(bridged, identityRow);
-      if (index >= 0) {
-        bridged[index] = web8_mergeIdentity_(bridged[index], identityRow);
-        matched++;
-      }
-    });
-
-    if (matched > 0) {
-      return {
-        scores: bridged,
-        source: 'api12',
-        bridge: true,
-        bridgeMethod: 'api5-id-to-api12'
-      };
-    }
-  }
-
-  return {
-    scores: real12 ? scores12 : scores5,
-    source: real12 ? 'api12' : 'api5',
-    bridge: false,
-    bridgeMethod: 'unbridged'
-  };
-}
-
-function web8_identityValues_(row) {
-  return {
-    name: web8_getPlayerName_(row) || '',
-    pdga: web8_getPdgaNumber_(row) || ''
-  };
-}
-
-function web8_mergeIdentity_(liveRow, identityRow) {
-  const out = Object.assign({}, liveRow || {});
-  if (!identityRow || typeof identityRow !== 'object') return out;
-
-  [
-    'FirstName','LastName','Name','ShortName',
-    'PDGANum','HasPDGANum','ProfileURL','AvatarURL',
-    'City','StateProv','Country','Nationality','Rating'
-  ].forEach(key => {
-    const value = web8_getField_(identityRow, [key]);
-    if (value !== undefined && value !== null && value !== '') {
-      out[key] = value;
-    }
-  });
-
-  return out;
-}
-
-function web8_findMatchingFinalsRowByIds_(finalsRows, identityRow) {
-  const keys = [
-    'ScoreID','RoundID','ResultID','LayoutID',
-    'CardNum','TeeTimeSort'
-  ];
-
-  const source = {};
-  keys.forEach(key => {
-    const value = web8_getField_(identityRow, [key]);
-    if (value !== undefined && value !== null && value !== '') {
-      source[key] = String(value);
-    }
-  });
-
-  let bestIndex = -1;
-  let bestStrength = 0;
-  let tiedBest = false;
-
-  (finalsRows || []).forEach((row, index) => {
-    let strength = 0;
-
-    Object.keys(source).forEach(key => {
-      const value = web8_getField_(row, [key]);
-      if (
-        value !== undefined &&
-        value !== null &&
-        value !== '' &&
-        String(value) === source[key]
-      ) {
-        strength++;
-      }
-    });
-
-    if (strength > bestStrength) {
-      bestStrength = strength;
-      bestIndex = index;
-      tiedBest = false;
-    } else if (strength > 0 && strength === bestStrength) {
-      tiedBest = true;
-    }
-  });
-
-  return bestStrength > 0 && !tiedBest ? bestIndex : -1;
-}
-
-function web8_buildDirectFinalsAssignments_(scores, picks) {
+function web8_buildFinalsAssignmentsV11_(round12Scores, updatedScores, round4Scores, picks) {
   const assignments = {};
+  const playerBatch = web8_fetchPlayerLiveBatch_(round4Scores, picks);
 
-  (picks || []).forEach(pick => {
-    const found = web8_findPlayer_(scores || [], pick);
-    if (!found) return;
-
-    const index = (scores || []).indexOf(found);
+  function assign(pick, record, method, index) {
+    if (!pick || !record || assignments[pick.pdga]) return false;
 
     assignments[pick.pdga] = {
-      player: found,
-      index: index,
-      method: 'direct-after-source-selection'
+      player: record,
+      method: method,
+      index: index == null ? -1 : index
     };
+
+    return true;
+  }
+
+  // 1) Full Round 12 feed if identity is actually present.
+  (picks || []).forEach(pick => {
+    const found = web8_findPlayer_(round12Scores || [], pick);
+    if (found) {
+      assign(
+        pick,
+        found,
+        'round12-direct',
+        (round12Scores || []).indexOf(found)
+      );
+    }
+  });
+
+  // 2) Updated-round feed, which may preserve player identity.
+  (picks || []).forEach(pick => {
+    if (assignments[pick.pdga]) return;
+
+    const found = web8_findPlayer_(updatedScores || [], pick);
+    if (found) {
+      assign(
+        pick,
+        found,
+        'updated-round-direct',
+        (updatedScores || []).indexOf(found)
+      );
+    }
+  });
+
+  // 3) Player-specific endpoint by known event ResultID from Round 4.
+  (picks || []).forEach(pick => {
+    if (assignments[pick.pdga]) return;
+
+    const info = playerBatch[pick.pdga];
+    if (!info || !info.record) return;
+
+    const record = Object.assign({}, info.record);
+
+    // Restore identity from the known pick so the frontend stays deterministic.
+    record.Name = pick.player;
+    record.PDGANum = pick.pdga;
+
+    const r4 = web8_findPlayer_(round4Scores || [], pick);
+    if (r4) {
+      ['Rating', 'Country', 'StateProv', 'City', 'ProfileURL', 'ShortName']
+        .forEach(key => {
+          const value = web8_getField_(r4, [key]);
+          if (
+            (record[key] === undefined || record[key] === null || record[key] === '') &&
+            value !== undefined &&
+            value !== null &&
+            value !== ''
+          ) {
+            record[key] = value;
+          }
+        });
+    }
+
+    // Only accept as Finals if the endpoint record looks newer than R4.
+    const round = web8_number_(web8_getField_(record, [
+      'Round', 'round', 'RoundNumber', 'roundNumber'
+    ]), 0);
+    const played = web8_number_(web8_getField_(record, [
+      'Played', 'played', 'HolesPlayed', 'holesPlayed'
+    ]), 0);
+    const roundToPar = web8_scoreNumber_(web8_getField_(record, [
+      'RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar'
+    ]));
+
+    if (round === 12 || round > 4 || played > 0 && roundToPar !== null) {
+      assign(pick, record, 'player-resultid', -1);
+    }
+  });
+
+  const kyleInfo = playerBatch['85132'] || {};
+  const kyleRecord = kyleInfo.record || null;
+
+  Object.defineProperty(assignments, '_debug', {
+    value: {
+      kyle: {
+        resultId: kyleInfo.resultId || '',
+        playerHttp: kyleInfo.http || 0,
+        playerCandidates: kyleInfo.candidateCount || 0,
+        selectedRound: kyleRecord
+          ? web8_number_(web8_getField_(kyleRecord, [
+              'Round', 'round', 'RoundNumber', 'roundNumber'
+            ]), 0)
+          : null,
+        played: kyleRecord
+          ? web8_number_(web8_getField_(kyleRecord, [
+              'Played', 'played', 'HolesPlayed', 'holesPlayed'
+            ]), 0)
+          : null,
+        roundToPar: kyleRecord
+          ? web8_scoreNumber_(web8_getField_(kyleRecord, [
+              'RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar'
+            ]))
+          : null,
+        toPar: kyleRecord
+          ? web8_scoreNumber_(web8_getField_(kyleRecord, [
+              'ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar'
+            ]))
+          : null
+      }
+    },
+    enumerable: false
   });
 
   return assignments;
