@@ -46,7 +46,7 @@ function doGet(e) {
   } catch (error) {
     payload = {
       ok: false,
-      bridgeVersion: 'direct-v11',
+      bridgeVersion: 'direct-v12',
       error: error && error.message ? error.message : String(error)
     };
   }
@@ -58,7 +58,7 @@ function doGet(e) {
 
 function web8_getPayload_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_direct_v11';
+  const cacheKey = 'pdga_picks_direct_v12';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -137,7 +137,7 @@ function web8_getPayload_() {
     });
 
     const finalsAssignments = currentRound === 5
-      ? web8_buildFinalsAssignmentsV11_(
+      ? web8_buildFinalsAssignmentsV12_(
           roundScores[5],
           updatedScores12,
           roundScores[4],
@@ -347,7 +347,7 @@ function web8_getPayload_() {
 
     const payload = {
       ok: true,
-      bridgeVersion: 'direct-v11',
+      bridgeVersion: 'direct-v12',
       eventId: WEB8_EVENT_ID,
       division: WEB8_DIVISION,
       currentRound: currentRound,
@@ -384,22 +384,30 @@ function web8_getPayload_() {
           kyleResultId: kyleDbg.resultId || '',
           kylePlayerHttp: kyleDbg.playerHttp || 0,
           kylePlayerCandidates: kyleDbg.playerCandidates || 0,
-          kylePlayerSelectedRound:
+          kyleSelectedRound:
             kyleDbg.selectedRound === null || kyleDbg.selectedRound === undefined
               ? ''
               : kyleDbg.selectedRound,
-          kylePlayerPlayed:
-            kyleDbg.played === null || kyleDbg.played === undefined
+          kyleSelectedResultId: kyleDbg.selectedResultId || '',
+          kyleSelectedScoreId: kyleDbg.selectedScoreId || '',
+          kyleFullRowMatched: !!kyleDbg.fullRowMatched,
+          kyleFullRowMethod: kyleDbg.fullRowMethod || '',
+          kyleFullRowIndex:
+            kyleDbg.fullRowIndex === null || kyleDbg.fullRowIndex === undefined
+              ? -1
+              : kyleDbg.fullRowIndex,
+          kyleFullRowPlayed:
+            kyleDbg.fullRowPlayed === null || kyleDbg.fullRowPlayed === undefined
               ? ''
-              : kyleDbg.played,
-          kylePlayerRoundToPar:
-            kyleDbg.roundToPar === null || kyleDbg.roundToPar === undefined
+              : kyleDbg.fullRowPlayed,
+          kyleFullRowRoundToPar:
+            kyleDbg.fullRowRoundToPar === null || kyleDbg.fullRowRoundToPar === undefined
               ? ''
-              : kyleDbg.roundToPar,
-          kylePlayerToPar:
-            kyleDbg.toPar === null || kyleDbg.toPar === undefined
+              : kyleDbg.fullRowRoundToPar,
+          kyleFullRowToPar:
+            kyleDbg.fullRowToPar === null || kyleDbg.fullRowToPar === undefined
               ? ''
-              : kyleDbg.toPar
+              : kyleDbg.fullRowToPar
         };
       })()
     };
@@ -872,7 +880,7 @@ function web8_identityRowCount_(scores) {
   }).length;
 }
 
-function web8_buildFinalsAssignmentsV11_(round12Scores, updatedScores, round4Scores, picks) {
+function web8_buildFinalsAssignmentsV12_(round12Scores, updatedScores, round4Scores, picks) {
   const assignments = {};
   const playerBatch = web8_fetchPlayerLiveBatch_(round4Scores, picks);
 
@@ -888,7 +896,7 @@ function web8_buildFinalsAssignmentsV11_(round12Scores, updatedScores, round4Sco
     return true;
   }
 
-  // 1) Full Round 12 feed if identity is actually present.
+  // 1) Full Round 12 feed if identity happens to match normally.
   (picks || []).forEach(pick => {
     const found = web8_findPlayer_(round12Scores || [], pick);
     if (found) {
@@ -901,7 +909,7 @@ function web8_buildFinalsAssignmentsV11_(round12Scores, updatedScores, round4Sco
     }
   });
 
-  // 2) Updated-round feed, which may preserve player identity.
+  // 2) Updated-round feed if it exposes identity.
   (picks || []).forEach(pick => {
     if (assignments[pick.pdga]) return;
 
@@ -916,18 +924,35 @@ function web8_buildFinalsAssignmentsV11_(round12Scores, updatedScores, round4Sco
     }
   });
 
-  // 3) Player-specific endpoint by known event ResultID from Round 4.
+  // 3) Player-specific endpoint gives us the correct Round-12 record for each
+  // picked player. Use its current Round-12 IDs to locate the matching row in
+  // the full Round-12 leaderboard, which has authoritative Played/ToPar/Place.
   (picks || []).forEach(pick => {
     if (assignments[pick.pdga]) return;
 
     const info = playerBatch[pick.pdga];
     if (!info || !info.record) return;
 
-    const record = Object.assign({}, info.record);
+    const playerRecord = info.record;
+    const fullMatch = web8_matchPlayerRecordToRound12_(
+      playerRecord,
+      round12Scores || []
+    );
 
-    // Restore identity from the known pick so the frontend stays deterministic.
-    record.Name = pick.player;
-    record.PDGANum = pick.pdga;
+    if (fullMatch && fullMatch.record) {
+      assign(
+        pick,
+        fullMatch.record,
+        'player-endpoint-to-round12:' + fullMatch.method,
+        fullMatch.index
+      );
+      return;
+    }
+
+    // Safe fallback: use the player endpoint record itself, but restore identity.
+    const fallback = Object.assign({}, playerRecord);
+    fallback.Name = pick.player;
+    fallback.PDGANum = pick.pdga;
 
     const r4 = web8_findPlayer_(round4Scores || [], pick);
     if (r4) {
@@ -935,34 +960,24 @@ function web8_buildFinalsAssignmentsV11_(round12Scores, updatedScores, round4Sco
         .forEach(key => {
           const value = web8_getField_(r4, [key]);
           if (
-            (record[key] === undefined || record[key] === null || record[key] === '') &&
+            (fallback[key] === undefined || fallback[key] === null || fallback[key] === '') &&
             value !== undefined &&
             value !== null &&
             value !== ''
           ) {
-            record[key] = value;
+            fallback[key] = value;
           }
         });
     }
 
-    // Only accept as Finals if the endpoint record looks newer than R4.
-    const round = web8_number_(web8_getField_(record, [
-      'Round', 'round', 'RoundNumber', 'roundNumber'
-    ]), 0);
-    const played = web8_number_(web8_getField_(record, [
-      'Played', 'played', 'HolesPlayed', 'holesPlayed'
-    ]), 0);
-    const roundToPar = web8_scoreNumber_(web8_getField_(record, [
-      'RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar'
-    ]));
-
-    if (round === 12 || round > 4 || played > 0 && roundToPar !== null) {
-      assign(pick, record, 'player-resultid', -1);
-    }
+    assign(pick, fallback, 'player-resultid-fallback', -1);
   });
 
   const kyleInfo = playerBatch['85132'] || {};
   const kyleRecord = kyleInfo.record || null;
+  const kyleFull = kyleRecord
+    ? web8_matchPlayerRecordToRound12_(kyleRecord, round12Scores || [])
+    : null;
 
   Object.defineProperty(assignments, '_debug', {
     value: {
@@ -975,18 +990,31 @@ function web8_buildFinalsAssignmentsV11_(round12Scores, updatedScores, round4Sco
               'Round', 'round', 'RoundNumber', 'roundNumber'
             ]), 0)
           : null,
-        played: kyleRecord
-          ? web8_number_(web8_getField_(kyleRecord, [
+        selectedResultId: kyleRecord
+          ? String(web8_getField_(kyleRecord, [
+              'ResultID', 'resultId', 'resultID', 'result_id'
+            ]) || '')
+          : '',
+        selectedScoreId: kyleRecord
+          ? String(web8_getField_(kyleRecord, [
+              'ScoreID', 'scoreId', 'scoreID', 'score_id'
+            ]) || '')
+          : '',
+        fullRowMatched: !!(kyleFull && kyleFull.record),
+        fullRowMethod: kyleFull ? kyleFull.method : '',
+        fullRowIndex: kyleFull ? kyleFull.index : -1,
+        fullRowPlayed: kyleFull && kyleFull.record
+          ? web8_number_(web8_getField_(kyleFull.record, [
               'Played', 'played', 'HolesPlayed', 'holesPlayed'
             ]), 0)
           : null,
-        roundToPar: kyleRecord
-          ? web8_scoreNumber_(web8_getField_(kyleRecord, [
+        fullRowRoundToPar: kyleFull && kyleFull.record
+          ? web8_scoreNumber_(web8_getField_(kyleFull.record, [
               'RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar'
             ]))
           : null,
-        toPar: kyleRecord
-          ? web8_scoreNumber_(web8_getField_(kyleRecord, [
+        fullRowToPar: kyleFull && kyleFull.record
+          ? web8_scoreNumber_(web8_getField_(kyleFull.record, [
               'ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar'
             ]))
           : null
@@ -996,6 +1024,120 @@ function web8_buildFinalsAssignmentsV11_(round12Scores, updatedScores, round4Sco
   });
 
   return assignments;
+}
+
+function web8_matchPlayerRecordToRound12_(playerRecord, round12Scores) {
+  if (!playerRecord) return null;
+
+  const strongKeys = [
+    'ResultID',
+    'ScoreID'
+  ];
+
+  // First try an exact unique match on the current Finals ResultID/ScoreID.
+  for (let k = 0; k < strongKeys.length; k++) {
+    const key = strongKeys[k];
+    const wanted = web8_getField_(playerRecord, [key]);
+
+    if (wanted === undefined || wanted === null || String(wanted) === '') {
+      continue;
+    }
+
+    const matches = [];
+
+    (round12Scores || []).forEach((row, index) => {
+      const value = web8_getField_(row, [key]);
+
+      if (
+        value !== undefined &&
+        value !== null &&
+        String(value) === String(wanted)
+      ) {
+        matches.push(index);
+      }
+    });
+
+    if (matches.length === 1) {
+      return {
+        record: round12Scores[matches[0]],
+        index: matches[0],
+        method: key.toLowerCase()
+      };
+    }
+  }
+
+  // Then use a multi-field Finals fingerprint. These fields are all present
+  // in the full Round-12 rows and many are also present in the player endpoint.
+  const compareKeys = [
+    'RoundID',
+    'LayoutID',
+    'CardNum',
+    'TeeTime',
+    'TeeStart',
+    'TeeTimeSort',
+    'PreviousPlace',
+    'PrevRndTotal',
+    'Rating',
+    'RoundScore',
+    'RoundtoPar',
+    'Par'
+  ];
+
+  const source = {};
+  compareKeys.forEach(key => {
+    const value = web8_getField_(playerRecord, [key]);
+    if (value !== undefined && value !== null && String(value) !== '') {
+      source[key] = String(value);
+    }
+  });
+
+  const ranked = [];
+
+  (round12Scores || []).forEach((row, index) => {
+    let strength = 0;
+    let compared = 0;
+
+    Object.keys(source).forEach(key => {
+      const value = web8_getField_(row, [key]);
+
+      if (value === undefined || value === null || String(value) === '') {
+        return;
+      }
+
+      compared++;
+
+      if (String(value) === source[key]) {
+        // Give more identifying fields more weight.
+        if (key === 'TeeTime' || key === 'TeeTimeSort') strength += 5;
+        else if (key === 'PreviousPlace' || key === 'PrevRndTotal') strength += 4;
+        else if (key === 'CardNum' || key === 'Rating') strength += 3;
+        else strength += 1;
+      }
+    });
+
+    if (strength > 0 && compared > 0) {
+      ranked.push({ index: index, strength: strength });
+    }
+  });
+
+  ranked.sort((a, b) => b.strength - a.strength);
+
+  if (
+    ranked.length &&
+    ranked[0].strength >= 7 &&
+    (
+      ranked.length === 1 ||
+      ranked[0].strength > ranked[1].strength
+    )
+  ) {
+    return {
+      record: round12Scores[ranked[0].index],
+      index: ranked[0].index,
+      method: 'fingerprint'
+    };
+  }
+
+  return null;
 }
 
 
