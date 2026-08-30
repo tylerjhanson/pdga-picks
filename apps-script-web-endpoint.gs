@@ -158,7 +158,7 @@ function web_getSheetPayload_() {
 
   return {
     ok: true,
-    bridgeVersion: 'finals-v3',
+    bridgeVersion: 'finals-v4',
     eventId: '97344',
     division: 'MPO',
     currentRound: currentRounds.length ? Math.max.apply(null, currentRounds) : 1,
@@ -327,15 +327,44 @@ function web_fetchFinalsRound12_() {
   // BEST PATH: reuse the exact PDGA fetch/parser that already worked for
   // Rounds 1-4 in the contest Sheet. fetchRoundRaw_(12) is valid even though
   // the normal Sheet refresh loop only iterates 1-5.
-  if (
-    typeof fetchRoundRaw_ === 'function' &&
-    typeof extractScoreArray_ === 'function'
-  ) {
+  if (typeof fetchRoundRaw_ === 'function') {
     const result = fetchRoundRaw_(12);
+
     if (result && result.json) {
-      scores = extractScoreArray_(result.json) || [];
+      // PDGA's live round endpoint has a stable top-level shape:
+      // { data: { scores: [...] } }.
+      // Read that exact array first. Finals payloads contain other nested
+      // arrays that can fool a generic "best array" detector.
+      let root = result.json;
+
+      if (typeof unwrapJsonStrings_ === 'function') {
+        root = unwrapJsonStrings_(root);
+      }
+
+      const data =
+        root && typeof root === 'object' && !Array.isArray(root)
+          ? (typeof getField_ === 'function'
+              ? getField_(root, ['data'])
+              : web_getField_(root, ['data']))
+          : null;
+
+      const directScores =
+        data && typeof data === 'object' && !Array.isArray(data)
+          ? (typeof getField_ === 'function'
+              ? getField_(data, ['scores', 'Scores'])
+              : web_getField_(data, ['scores', 'Scores']))
+          : null;
+
+      if (Array.isArray(directScores)) {
+        scores = directScores;
+        debug = 'Direct data.scores; HTTP ' + (result && result.code);
+      } else if (typeof extractScoreArray_ === 'function') {
+        scores = extractScoreArray_(root) || [];
+        debug = 'Fallback Sheet parser; HTTP ' + (result && result.code);
+      }
     }
-    debug = 'Sheet parser; HTTP ' + (result && result.code);
+
+    if (!debug) debug = 'Sheet fetch; HTTP ' + (result && result.code);
   } else {
     // Fallback only if the endpoint file was somehow installed without
     // the main contest script in the same Apps Script project.
