@@ -1,12 +1,37 @@
 /**
- * Add this file to the SAME Apps Script project as the working PDGA contest sheet.
+ * Web endpoint for the standalone PDGA Picks page.
+ *
+ * Add this file to the SAME Apps Script project as the working contest Sheet.
  *
  * Deploy as a Web app:
  *   Execute as: Me
  *   Who has access: Anyone
  *
- * The GitHub Pages frontend uses JSONP, so this works without browser CORS issues.
+ * IMPORTANT FOR 2026 PRO WORLDS:
+ * PDGA identifies the fifth/final round as API Round=12 ("Finals"), not Round=5.
+ * This bridge maps PDGA Round 12 -> contest R5.
  */
+
+const WEB_PICKS_ = [
+  { entrant: 'Ben',    player: 'Ricky Wysocki',    pdga: '38008' },
+  { entrant: 'Ben',    player: 'Isaac Robinson',   pdga: '50670' },
+  { entrant: 'Ben',    player: 'Evan Smith',       pdga: '101574' },
+  { entrant: 'Ben',    player: 'Luke Taylor',      pdga: '102119' },
+  { entrant: 'Ben',    player: 'Kyle Klein',       pdga: '85132' },
+
+  { entrant: 'Nathan', player: 'Niklas Anttila',   pdga: '91249' },
+  { entrant: 'Nathan', player: 'Gannon Buhr',      pdga: '75412' },
+  { entrant: 'Nathan', player: 'Ezra Robinson',    pdga: '50671' },
+  { entrant: 'Nathan', player: 'Sullivan Tipton',  pdga: '78817' },
+  { entrant: 'Nathan', player: 'Cole Redalen',     pdga: '79748' },
+
+  { entrant: 'Tyler',  player: 'Calvin Heimburg',  pdga: '45971' },
+  { entrant: 'Tyler',  player: 'Eagle McMahon',    pdga: '37817' },
+  { entrant: 'Tyler',  player: 'Simon Lizotte',    pdga: '8332' },
+  { entrant: 'Tyler',  player: 'Adam Hammes',      pdga: '57365' },
+  { entrant: 'Tyler',  player: 'Anthony Barela',   pdga: '44382' }
+];
+
 function doGet(e) {
   const requested = e && e.parameter ? String(e.parameter.callback || '') : '';
   const callback = /^[A-Za-z_$][0-9A-Za-z_$]*$/.test(requested)
@@ -15,19 +40,29 @@ function doGet(e) {
 
   let refreshWarning = '';
 
-  // Keep the public webpage much closer to PDGA Live than the normal
-  // 1-minute Sheet trigger. Across all viewers, allow at most one fresh
-  // PDGA pull every 20 seconds.
   try {
-    refreshContestForWeb_();
+    web_refreshContest_();
   } catch (error) {
-    // If PDGA has a temporary problem, still return the latest Sheet snapshot.
     refreshWarning = error && error.message ? error.message : String(error);
   }
 
   let payload;
+
   try {
-    payload = getContestWebPayload_();
+    payload = web_getSheetPayload_();
+
+    // PDGA's final round is special: Round=12 is "Finals".
+    // Overlay that feed onto the Sheet snapshot as contest R5.
+    try {
+      payload = web_applyFinalsRound12_(payload);
+    } catch (finalsError) {
+      if (!refreshWarning) {
+        refreshWarning = finalsError && finalsError.message
+          ? finalsError.message
+          : String(finalsError);
+      }
+    }
+
     if (refreshWarning) payload.refreshWarning = refreshWarning;
   } catch (error) {
     payload = {
@@ -41,7 +76,7 @@ function doGet(e) {
     .setMimeType(ContentService.MimeType.JAVASCRIPT);
 }
 
-function refreshContestForWeb_() {
+function web_refreshContest_() {
   const cache = CacheService.getScriptCache();
   const cacheKey = 'pdga_picks_web_refresh';
 
@@ -51,8 +86,6 @@ function refreshContestForWeb_() {
   if (!lock.tryLock(1500)) return;
 
   try {
-    // Check again after obtaining the lock because another viewer may have
-    // completed a refresh while this request was waiting.
     if (cache.get(cacheKey)) return;
 
     if (typeof refreshScores !== 'function') {
@@ -66,7 +99,7 @@ function refreshContestForWeb_() {
   }
 }
 
-function getContestWebPayload_() {
+function web_getSheetPayload_() {
   const ss = SpreadsheetApp.getActive();
   const sheet = ss.getSheetByName('Contest');
   if (!sheet) throw new Error('Contest sheet not found.');
@@ -74,17 +107,18 @@ function getContestWebPayload_() {
   const standings = sheet.getRange(3, 1, 3, 5).getValues()
     .filter(row => row[1])
     .map(row => ({
-      rank: valueOrNull_(row[0]),
+      rank: web_valueOrNull_(row[0]),
       entrant: String(row[1] || ''),
-      contestTotal: numericOrNull_(row[2]),
+      contestTotal: web_numericOrNull_(row[2]),
       droppedPlayer: String(row[3] || ''),
-      droppedScore: numericOrNull_(row[4])
+      droppedScore: web_numericOrNull_(row[4])
     }));
 
   const headerRow = 8;
   const firstDataRow = 9;
   const headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
   const headerMap = {};
+
   headers.forEach((header, i) => {
     if (header) headerMap[String(header).trim()] = i;
   });
@@ -99,16 +133,17 @@ function getContestWebPayload_() {
 
   const players = raw
     .filter(row => cell(row, 'Entrant') && cell(row, 'Player'))
-    .map(row => ({
+    .map((row, order) => ({
       entrant: String(cell(row, 'Entrant') || ''),
       player: String(cell(row, 'Player') || ''),
-      rounds: [1,2,3,4,5].map(n => numericOrNull_(cell(row, 'R' + n))),
-      total: numericOrNull_(cell(row, 'Total')),
-      currentRound: numericOrNull_(cell(row, 'Current Rd')),
+      rounds: [1,2,3,4,5].map(n => web_numericOrNull_(cell(row, 'R' + n))),
+      total: web_numericOrNull_(cell(row, 'Total')),
+      currentRound: web_numericOrNull_(cell(row, 'Current Rd')),
       thru: String(cell(row, 'Thru') || '-'),
       place: String(cell(row, 'Place') || ''),
-      updated: dateIsoOrNull_(cell(row, 'Updated')),
-      drop: String(cell(row, 'Drop?') || '').toUpperCase() === 'DROP'
+      updated: web_dateIsoOrNull_(cell(row, 'Updated')),
+      drop: String(cell(row, 'Drop?') || '').toUpperCase() === 'DROP',
+      _order: order
     }));
 
   const updatedTimes = players
@@ -126,23 +161,439 @@ function getContestWebPayload_() {
     eventId: '97344',
     division: 'MPO',
     currentRound: currentRounds.length ? Math.max.apply(null, currentRounds) : 1,
-    updatedAt: updatedTimes.length ? new Date(Math.max.apply(null, updatedTimes)).toISOString() : new Date().toISOString(),
+    updatedAt: updatedTimes.length
+      ? new Date(Math.max.apply(null, updatedTimes)).toISOString()
+      : new Date().toISOString(),
     standings,
     players
   };
 }
 
-function numericOrNull_(value) {
+function web_applyFinalsRound12_(payload) {
+  const finals = web_fetchFinalsRound12_();
+  const scores = finals.scores || [];
+
+  // If PDGA has not populated the Finals feed yet, keep the Sheet snapshot.
+  if (!scores.length) return payload;
+
+  const hasFinalsScoring = scores.some(player => {
+    const played = web_number_(web_getField_(player, ['Played', 'played', 'HolesPlayed', 'holesPlayed']), 0);
+    const completed = web_bool_(web_getField_(player, ['Completed', 'completed', 'IsComplete', 'isComplete']));
+    const roundToPar = web_scoreNumber_(web_getField_(player, [
+      'RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar', 'RdToPar', 'rdToPar'
+    ]));
+    return played > 0 || completed || (roundToPar !== null && roundToPar !== 0);
+  });
+
+  // The feed exists even before the first throw. Once it exists, this is contest R5.
+  payload.currentRound = 5;
+
+  payload.players.forEach((player, order) => {
+    player._order = typeof player._order === 'number' ? player._order : order;
+    const pick = web_findPick_(player.entrant, player.player);
+    if (!pick) return;
+
+    const feedPlayer = scores.find(p => {
+      const pdga = web_getPdgaNumber_(p);
+      return pdga && String(pdga) === String(pick.pdga);
+    });
+
+    player.currentRound = 5;
+
+    if (!feedPlayer) {
+      // Not present in Finals feed = did not advance to the final round.
+      player.thru = 'CUT';
+      player.place = player.place || '';
+      return;
+    }
+
+    const played = web_number_(web_getField_(feedPlayer, [
+      'Played', 'played', 'HolesPlayed', 'holesPlayed'
+    ]), 0);
+
+    const holes = web_number_(web_getField_(feedPlayer, [
+      'Holes', 'holes', 'TotalHoles', 'totalHoles'
+    ]), 18);
+
+    const completed = web_bool_(web_getField_(feedPlayer, [
+      'Completed', 'completed', 'IsComplete', 'isComplete'
+    ]));
+
+    const roundToPar = web_scoreNumber_(web_getField_(feedPlayer, [
+      'RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar', 'RdToPar', 'rdToPar'
+    ]));
+
+    const cumulative = web_scoreNumber_(web_getField_(feedPlayer, [
+      'ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar', 'Total'
+    ]));
+
+    // Only put a number into R5 after the player has actually started.
+    if (roundToPar !== null && (played > 0 || completed)) {
+      player.rounds[4] = roundToPar;
+    }
+
+    // ToPar is the correct cumulative tournament total for finalists.
+    if (cumulative !== null) {
+      player.total = cumulative;
+    }
+
+    player.thru = completed || played >= holes
+      ? 'F'
+      : (played > 0 ? String(played) : '-');
+
+    const runningPlace = web_getField_(feedPlayer, [
+      'RunningPlace', 'runningPlace', 'Place', 'place', 'Position', 'position'
+    ]);
+
+    if (runningPlace !== null && runningPlace !== undefined && runningPlace !== '') {
+      const tied = web_bool_(web_getField_(feedPlayer, ['Tied', 'tied', 'IsTied', 'isTied']));
+      player.place = (tied ? 'T' : '') + runningPlace;
+    }
+
+    player.updated = finals.fetchedAt;
+  });
+
+  // Once real Finals scoring has started, use the fresh fetch time.
+  if (hasFinalsScoring) payload.updatedAt = finals.fetchedAt;
+
+  payload.standings = web_recomputeStandings_(payload.players);
+
+  // Keep the Sheet useful too. This writes R5 / Total / Round / Thru / Place
+  // back to the existing rows after the old refreshScores() has run.
+  try {
+    web_writeFinalsToSheet_(payload);
+  } catch (e) {
+    // The public page should still work even if the Sheet write fails.
+  }
+
+  return payload;
+}
+
+function web_fetchFinalsRound12_() {
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'pdga_picks_finals_round_12';
+  const cached = cache.get(cacheKey);
+
+  if (cached) {
+    try {
+      return JSON.parse(cached);
+    } catch (e) {}
+  }
+
+  const url =
+    'https://www.pdga.com/apps/tournament/live-api/live_results_fetch_round' +
+    '?TournID=97344&Division=MPO&Round=12';
+
+  const response = UrlFetchApp.fetch(url, {
+    method: 'get',
+    followRedirects: true,
+    muteHttpExceptions: true,
+    headers: {
+      'Accept': 'application/json, text/plain, */*',
+      'User-Agent': 'Mozilla/5.0 (compatible; PDGA-Picks/1.0)',
+      'Referer': 'https://www.pdga.com/live/event/97344/MPO/scores?round=12',
+      'Cache-Control': 'no-cache'
+    }
+  });
+
+  if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) {
+    throw new Error('PDGA Finals request returned HTTP ' + response.getResponseCode() + '.');
+  }
+
+  let json;
+  try {
+    json = JSON.parse(response.getContentText());
+  } catch (e) {
+    throw new Error('PDGA Finals response was not valid JSON.');
+  }
+
+  const scores = web_extractScoreArray_(json);
+  const result = {
+    scores: scores,
+    fetchedAt: new Date().toISOString()
+  };
+
+  // Keep all viewers from independently hitting PDGA every 30 seconds.
+  try {
+    cache.put(cacheKey, JSON.stringify(result), 15);
+  } catch (e) {}
+
+  return result;
+}
+
+function web_recomputeStandings_(players) {
+  const entrantOrder = ['Ben', 'Nathan', 'Tyler'];
+
+  const standings = entrantOrder.map(entrant => {
+    const group = players
+      .filter(p => p.entrant === entrant)
+      .map((p, i) => ({ ...p, _stable: typeof p._order === 'number' ? p._order : i }))
+      .filter(p => typeof p.total === 'number' && Number.isFinite(p.total))
+      .sort((a, b) => {
+        if (a.total !== b.total) return a.total - b.total;
+        return a._stable - b._stable;
+      });
+
+    if (group.length < 5) {
+      return {
+        entrant: entrant,
+        contestTotal: null,
+        droppedPlayer: '',
+        droppedScore: null
+      };
+    }
+
+    // Best-to-worst list. If worst is tied, the visually LAST tied player is dropped.
+    const dropped = group[group.length - 1];
+    const contestTotal = group.reduce((sum, p) => sum + p.total, 0) - dropped.total;
+
+    return {
+      entrant: entrant,
+      contestTotal: contestTotal,
+      droppedPlayer: dropped.player,
+      droppedScore: dropped.total
+    };
+  });
+
+  standings.sort((a, b) => {
+    const aBlank = typeof a.contestTotal !== 'number';
+    const bBlank = typeof b.contestTotal !== 'number';
+    if (aBlank && bBlank) return entrantOrder.indexOf(a.entrant) - entrantOrder.indexOf(b.entrant);
+    if (aBlank) return 1;
+    if (bBlank) return -1;
+    if (a.contestTotal !== b.contestTotal) return a.contestTotal - b.contestTotal;
+    return entrantOrder.indexOf(a.entrant) - entrantOrder.indexOf(b.entrant);
+  });
+
+  standings.forEach(s => {
+    if (typeof s.contestTotal !== 'number') {
+      s.rank = null;
+    } else {
+      s.rank = 1 + standings.filter(
+        other => typeof other.contestTotal === 'number' && other.contestTotal < s.contestTotal
+      ).length;
+    }
+  });
+
+  return standings;
+}
+
+function web_writeFinalsToSheet_(payload) {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName('Contest');
+  if (!sheet) return;
+
+  const headerRow = 8;
+  const firstDataRow = 9;
+  const headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+  const col = {};
+
+  headers.forEach((header, i) => {
+    if (header) col[String(header).trim()] = i + 1;
+  });
+
+  const rowCount = Math.min(15, Math.max(0, sheet.getLastRow() - firstDataRow + 1));
+  const rows = rowCount
+    ? sheet.getRange(firstDataRow, 1, rowCount, Math.max(col['Updated'] || 12, 12)).getDisplayValues()
+    : [];
+
+  payload.players.forEach(player => {
+    const pick = web_findPick_(player.entrant, player.player);
+    if (!pick) return;
+
+    const target = rows.findIndex(row => {
+      const entrant = String(row[(col['Entrant'] || 1) - 1] || '');
+      const display = String(row[(col['Player'] || 2) - 1] || '');
+      return entrant === player.entrant && web_namesMatch_(display, pick.player);
+    });
+
+    if (target < 0) return;
+    const rowNumber = firstDataRow + target;
+
+    if (col['R5']) {
+      sheet.getRange(rowNumber, col['R5']).setValue(
+        player.rounds && typeof player.rounds[4] === 'number' ? player.rounds[4] : ''
+      );
+    }
+    if (col['Total'] && typeof player.total === 'number') {
+      sheet.getRange(rowNumber, col['Total']).setValue(player.total);
+    }
+    if (col['Current Rd']) sheet.getRange(rowNumber, col['Current Rd']).setValue(5);
+    if (col['Thru']) sheet.getRange(rowNumber, col['Thru']).setValue(player.thru || '-');
+    if (col['Place']) sheet.getRange(rowNumber, col['Place']).setValue(player.place || '');
+    if (col['Updated']) sheet.getRange(rowNumber, col['Updated']).setValue(new Date());
+  });
+
+  const standingsValues = payload.standings.map(s => [
+    s.rank || '',
+    s.entrant,
+    typeof s.contestTotal === 'number' ? s.contestTotal : '',
+    s.droppedPlayer || '',
+    typeof s.droppedScore === 'number' ? s.droppedScore : ''
+  ]);
+
+  if (standingsValues.length) {
+    sheet.getRange(3, 1, standingsValues.length, 5).setValues(standingsValues);
+  }
+
+  SpreadsheetApp.flush();
+}
+
+function web_findPick_(entrant, displayedName) {
+  return WEB_PICKS_.find(p =>
+    p.entrant === entrant && web_namesMatch_(displayedName, p.player)
+  ) || null;
+}
+
+function web_namesMatch_(a, b) {
+  const aa = web_normalizeName_(a);
+  const bb = web_normalizeName_(b);
+
+  if (aa === bb) return true;
+
+  // Sheet displays names as "C. Heimburg", while pick config has "Calvin Heimburg".
+  const ap = aa.split(' ');
+  const bp = bb.split(' ');
+
+  if (ap.length >= 2 && bp.length >= 2) {
+    const aLast = ap[ap.length - 1];
+    const bLast = bp[bp.length - 1];
+    const aFirst = ap[0];
+    const bFirst = bp[0];
+
+    if (
+      aLast === bLast &&
+      aFirst.charAt(0) === bFirst.charAt(0)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function web_normalizeName_(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function web_getPdgaNumber_(player) {
+  return web_getField_(player, [
+    'PDGANum', 'pdgaNum', 'PDGANumber', 'pdgaNumber',
+    'PDGA', 'pdga', 'PDGA#', 'PDGA_Number', 'pdga_number'
+  ]);
+}
+
+function web_extractScoreArray_(root) {
+  let rootValue = root;
+
+  if (rootValue && typeof rootValue === 'object' && !Array.isArray(rootValue)) {
+    const data = web_getField_(rootValue, ['data']);
+    if (data !== undefined) rootValue = data;
+  }
+
+  if (rootValue && typeof rootValue === 'object' && !Array.isArray(rootValue)) {
+    const direct = web_getField_(rootValue, ['scores', 'Scores']);
+    if (Array.isArray(direct)) return direct;
+  }
+
+  const candidates = [];
+
+  function walk(value, depth) {
+    if (depth > 8 || value === null || value === undefined) return;
+
+    if (Array.isArray(value)) {
+      const objects = value.filter(v => v && typeof v === 'object' && !Array.isArray(v));
+
+      if (objects.length) {
+        let score = 0;
+
+        objects.slice(0, 10).forEach(obj => {
+          if (web_getField_(obj, ['Name', 'name', 'PlayerName', 'playerName'])) score += 5;
+          if (web_getField_(obj, ['ToPar', 'toPar', 'topar']) !== undefined) score += 3;
+          if (web_getField_(obj, ['RoundtoPar', 'RoundToPar', 'roundToPar']) !== undefined) score += 3;
+          if (web_getField_(obj, ['Played', 'played']) !== undefined) score += 1;
+        });
+
+        candidates.push({ value: value, score: score + Math.min(objects.length, 200) / 100 });
+      }
+
+      value.slice(0, 20).forEach(v => walk(v, depth + 1));
+      return;
+    }
+
+    if (typeof value === 'object') {
+      Object.keys(value).forEach(key => walk(value[key], depth + 1));
+    }
+  }
+
+  walk(rootValue, 0);
+  candidates.sort((a, b) => b.score - a.score);
+
+  return candidates.length && candidates[0].score >= 5
+    ? candidates[0].value
+    : [];
+}
+
+function web_getField_(obj, names) {
+  if (!obj || typeof obj !== 'object') return undefined;
+
+  for (let i = 0; i < names.length; i++) {
+    if (Object.prototype.hasOwnProperty.call(obj, names[i])) return obj[names[i]];
+  }
+
+  const keyMap = {};
+  Object.keys(obj).forEach(key => {
+    keyMap[String(key).toLowerCase()] = key;
+  });
+
+  for (let i = 0; i < names.length; i++) {
+    const actual = keyMap[String(names[i]).toLowerCase()];
+    if (actual !== undefined) return obj[actual];
+  }
+
+  return undefined;
+}
+
+function web_numericOrNull_(value) {
   if (value === '' || value === null || value === undefined) return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
 
-function valueOrNull_(value) {
+function web_scoreNumber_(value) {
+  if (value === '' || value === null || value === undefined) return null;
+  if (typeof value === 'string' && value.trim().toUpperCase() === 'E') return 0;
+
+  const cleaned = typeof value === 'string'
+    ? value.replace(/^\+/, '').trim()
+    : value;
+
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+function web_number_(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function web_bool_(value) {
+  if (value === true || value === 1 || value === '1') return true;
+  if (typeof value === 'string') {
+    return ['true', 'yes', 'y'].indexOf(value.toLowerCase()) >= 0;
+  }
+  return false;
+}
+
+function web_valueOrNull_(value) {
   return value === '' || value === null || value === undefined ? null : value;
 }
 
-function dateIsoOrNull_(value) {
+function web_dateIsoOrNull_(value) {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
   if (!value) return null;
   const d = new Date(value);
