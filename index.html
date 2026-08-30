@@ -190,6 +190,7 @@
 
       function playerStatus(p) {
         if (p.thru === "F") return "F";
+        if (p.thru === "CUT") return "CUT";
         if (p.thru && p.thru !== "-") return "Thru " + p.thru;
         return "Not started";
       }
@@ -276,7 +277,7 @@
         liveContent.classList.remove("hidden");
 
         statusDot.className = "dot live";
-        statusText.textContent = "Live · Round " + currentRound;
+        statusText.textContent = currentRound === 5 ? "Live · Finals" : "Live · Round " + currentRound;
         updatedText.textContent = payload.updatedAt ? "Updated " + niceTime(payload.updatedAt) : "";
 
         $("cards").innerHTML = standings.map(s => {
