@@ -158,7 +158,7 @@ function web_getSheetPayload_() {
 
   return {
     ok: true,
-    bridgeVersion: 'finals-v5',
+    bridgeVersion: 'finals-v6',
     eventId: '97344',
     division: 'MPO',
     currentRound: currentRounds.length ? Math.max.apply(null, currentRounds) : 1,
@@ -313,7 +313,7 @@ function web_applyFinalsRound12_(payload) {
 
 function web_fetchFinalsRound12_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_finals_dynamic_v5';
+  const cacheKey = 'pdga_picks_finals_dynamic_v6';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -401,7 +401,12 @@ function web_fetchFinalsRound12_() {
           ? scoreNumber_(getField_(player, ['RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar', 'RdToPar', 'rdToPar']))
           : web_scoreNumber_(web_getField_(player, ['RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar', 'RdToPar', 'rdToPar']));
 
-        const active = played > 0 || completed || roundToPar !== null;
+        // PDGA future/placeholder round feeds can contain RoundtoPar = 0
+        // before anyone has started. Do NOT count that as live scoring.
+        const active =
+          played > 0 ||
+          completed ||
+          (roundToPar !== null && roundToPar !== 0);
 
         if (active) activePlayers++;
         totalPlayed += played;
@@ -432,11 +437,13 @@ function web_fetchFinalsRound12_() {
       });
 
       // Strongly prefer the round that contains LIVE scoring for our actual picks.
+      // Real holes played are the strongest signal. This prevents a
+      // placeholder Round=5 roster full of zeroes from beating the Finals feed.
       const quality =
-        (matchedActivePicks * 100000) +
-        (matchedPicks * 10000) +
+        (matchedActivePicks * 1000000) +
+        (totalPlayed * 10000) +
         (activePlayers * 100) +
-        totalPlayed;
+        matchedPicks;
 
       attempts.push({
         round: round,
