@@ -252,8 +252,22 @@ function web_applyFinalsRound12_(payload) {
       : web_scoreNumber_(web_getField_(feedPlayer, ['ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar', 'Total']));
 
     // Only put a number into R5 after the player has actually started.
-    if (roundToPar !== null && (played > 0 || completed)) {
-      player.rounds[4] = roundToPar;
+    if (played > 0 || completed) {
+      if (roundToPar !== null) {
+        player.rounds[4] = roundToPar;
+      } else if (cumulative !== null) {
+        // Finals feeds can differ from normal rounds. If PDGA gives us the
+        // cumulative tournament score but not RoundtoPar, derive R5 from the
+        // four completed rounds already stored in the Sheet.
+        const priorRounds = (player.rounds || []).slice(0, 4);
+        if (
+          priorRounds.length === 4 &&
+          priorRounds.every(value => typeof value === 'number' && Number.isFinite(value))
+        ) {
+          player.rounds[4] =
+            cumulative - priorRounds.reduce((sum, value) => sum + value, 0);
+        }
+      }
     }
 
     // ToPar is the correct cumulative tournament total for finalists.
