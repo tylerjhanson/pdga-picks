@@ -281,7 +281,7 @@
         setupPanel.classList.add("hidden");
         liveContent.classList.remove("hidden");
 
-        const finalsBridgeCurrent = payload.bridgeVersion === "direct-v11";
+        const finalsBridgeCurrent = payload.bridgeVersion === "direct-v12";
         statusDot.className = finalsBridgeCurrent ? "dot live" : "dot";
         statusText.textContent = !finalsBridgeCurrent
           ? "Backend update required"
@@ -297,7 +297,7 @@
         const kyle = players.find(p => p.player === "Kyle Klein");
         const kyleR5 = kyle && Array.isArray(kyle.rounds) ? kyle.rounds[4] : null;
         const debugBits = [
-          "Build: debug-11 · Backend: " + esc(payload.bridgeVersion || "unknown"),
+          "Build: debug-12 · Backend: " + esc(payload.bridgeVersion || "unknown"),
           finalsDiag
             ? "R5/API " + esc(finalsDiag.apiRound) +
               ": " + esc(finalsDiag.players) + " players, live=" + esc(finalsDiag.realScoring)
@@ -316,30 +316,35 @@
               " · updated=" + esc(payload.matchDiagnostics.updatedHttp) +
               " / rows=" + esc(payload.matchDiagnostics.updatedPlayers) +
               " / IDs=" + esc(payload.matchDiagnostics.updatedIdentityRows) +
-              " · ResultID=" + esc(payload.matchDiagnostics.kyleResultId || "-") +
+              " · oldResultID=" + esc(payload.matchDiagnostics.kyleResultId || "-") +
               " · playerHTTP=" + esc(payload.matchDiagnostics.kylePlayerHttp) +
               " · candidates=" + esc(payload.matchDiagnostics.kylePlayerCandidates) +
-              " · selectedRound=" + esc(payload.matchDiagnostics.kylePlayerSelectedRound || "-") +
+              " · selectedRound=" + esc(payload.matchDiagnostics.kyleSelectedRound || "-") +
+              " · newResultID=" + esc(payload.matchDiagnostics.kyleSelectedResultId || "-") +
+              " · scoreID=" + esc(payload.matchDiagnostics.kyleSelectedScoreId || "-") +
+              " · fullRow=" + esc(payload.matchDiagnostics.kyleFullRowMatched) +
+              " / " + esc(payload.matchDiagnostics.kyleFullRowMethod || "-") +
+              " / index=" + esc(payload.matchDiagnostics.kyleFullRowIndex) +
               " · played=" + esc(
-                payload.matchDiagnostics.kylePlayerPlayed === "" ||
-                payload.matchDiagnostics.kylePlayerPlayed === null ||
-                payload.matchDiagnostics.kylePlayerPlayed === undefined
+                payload.matchDiagnostics.kyleFullRowPlayed === "" ||
+                payload.matchDiagnostics.kyleFullRowPlayed === null ||
+                payload.matchDiagnostics.kyleFullRowPlayed === undefined
                   ? "-"
-                  : payload.matchDiagnostics.kylePlayerPlayed
+                  : payload.matchDiagnostics.kyleFullRowPlayed
               ) +
               " · R5=" + esc(
-                payload.matchDiagnostics.kylePlayerRoundToPar === "" ||
-                payload.matchDiagnostics.kylePlayerRoundToPar === null ||
-                payload.matchDiagnostics.kylePlayerRoundToPar === undefined
+                payload.matchDiagnostics.kyleFullRowRoundToPar === "" ||
+                payload.matchDiagnostics.kyleFullRowRoundToPar === null ||
+                payload.matchDiagnostics.kyleFullRowRoundToPar === undefined
                   ? "-"
-                  : payload.matchDiagnostics.kylePlayerRoundToPar
+                  : payload.matchDiagnostics.kyleFullRowRoundToPar
               ) +
               " · total=" + esc(
-                payload.matchDiagnostics.kylePlayerToPar === "" ||
-                payload.matchDiagnostics.kylePlayerToPar === null ||
-                payload.matchDiagnostics.kylePlayerToPar === undefined
+                payload.matchDiagnostics.kyleFullRowToPar === "" ||
+                payload.matchDiagnostics.kyleFullRowToPar === null ||
+                payload.matchDiagnostics.kyleFullRowToPar === undefined
                   ? "-"
-                  : payload.matchDiagnostics.kylePlayerToPar
+                  : payload.matchDiagnostics.kyleFullRowToPar
               )
             : "Kyle match diagnostic unavailable"
         ];
