@@ -286,6 +286,10 @@
         statusText.textContent = !finalsBridgeCurrent
           ? "Backend update required"
           : (currentRound === 5 ? "Live · Finals" : "Live · Round " + currentRound);
+
+        if (!finalsBridgeCurrent) {
+          $("cards").innerHTML = "";
+        }
         updatedText.textContent = payload.updatedAt ? "Updated " + niceTime(payload.updatedAt) : "";
         const finalsDiag = Array.isArray(payload.feedDiagnostics)
           ? payload.feedDiagnostics.find(d => Number(d.contestRound) === 5)
@@ -317,6 +321,8 @@
         ];
         $("liveDebug").innerHTML = debugBits.join(" &nbsp;·&nbsp; ");
 
+
+        if (!finalsBridgeCurrent) return;
 
         $("cards").innerHTML = standings.map(s => {
           const group = s._group;
