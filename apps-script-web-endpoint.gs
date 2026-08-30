@@ -13,23 +13,23 @@
  */
 
 const WEB_PICKS_ = [
-  { entrant: 'Ben',    player: 'Ricky Wysocki',    pdga: '38008' },
-  { entrant: 'Ben',    player: 'Isaac Robinson',   pdga: '50670' },
-  { entrant: 'Ben',    player: 'Evan Smith',       pdga: '101574' },
-  { entrant: 'Ben',    player: 'Luke Taylor',      pdga: '102119' },
-  { entrant: 'Ben',    player: 'Kyle Klein',       pdga: '85132' },
+  { entrant: 'Ben',    player: 'Ricky Wysocki',    pdga: '38008', aliases: ['Richard Wysocki', 'Ricky Wysocki'] },
+  { entrant: 'Ben',    player: 'Isaac Robinson',   pdga: '50670', aliases: ['Isaac Robinson'] },
+  { entrant: 'Ben',    player: 'Evan Smith',       pdga: '101574', aliases: ['Evan Smith'] },
+  { entrant: 'Ben',    player: 'Luke Taylor',      pdga: '102119', aliases: ['Luke Taylor'] },
+  { entrant: 'Ben',    player: 'Kyle Klein',       pdga: '85132', aliases: ['Kyle Klein'] },
 
-  { entrant: 'Nathan', player: 'Niklas Anttila',   pdga: '91249' },
-  { entrant: 'Nathan', player: 'Gannon Buhr',      pdga: '75412' },
-  { entrant: 'Nathan', player: 'Ezra Robinson',    pdga: '50671' },
-  { entrant: 'Nathan', player: 'Sullivan Tipton',  pdga: '78817' },
-  { entrant: 'Nathan', player: 'Cole Redalen',     pdga: '79748' },
+  { entrant: 'Nathan', player: 'Niklas Anttila',   pdga: '91249', aliases: ['Niklas Anttila', 'Niklas Antilla'] },
+  { entrant: 'Nathan', player: 'Gannon Buhr',      pdga: '75412', aliases: ['Gannon Buhr'] },
+  { entrant: 'Nathan', player: 'Ezra Robinson',    pdga: '50671', aliases: ['Ezra Robinson'] },
+  { entrant: 'Nathan', player: 'Sullivan Tipton',  pdga: '78817', aliases: ['Sullivan Tipton'] },
+  { entrant: 'Nathan', player: 'Cole Redalen',     pdga: '79748', aliases: ['Cole Redalen'] },
 
-  { entrant: 'Tyler',  player: 'Calvin Heimburg',  pdga: '45971' },
-  { entrant: 'Tyler',  player: 'Eagle McMahon',    pdga: '37817' },
-  { entrant: 'Tyler',  player: 'Simon Lizotte',    pdga: '8332' },
-  { entrant: 'Tyler',  player: 'Adam Hammes',      pdga: '57365' },
-  { entrant: 'Tyler',  player: 'Anthony Barela',   pdga: '44382' }
+  { entrant: 'Tyler',  player: 'Calvin Heimburg',  pdga: '45971', aliases: ['Calvin Heimburg'] },
+  { entrant: 'Tyler',  player: 'Eagle McMahon',    pdga: '37817', aliases: ['Eagle McMahon'] },
+  { entrant: 'Tyler',  player: 'Simon Lizotte',    pdga: '8332', aliases: ['Simon Lizotte'] },
+  { entrant: 'Tyler',  player: 'Adam Hammes',      pdga: '57365', aliases: ['Adam Hammes'] },
+  { entrant: 'Tyler',  player: 'Anthony Barela',   pdga: '44382', aliases: ['Anthony Barela'] }
 ];
 
 function doGet(e) {
@@ -172,6 +172,11 @@ function web_getSheetPayload_() {
 function web_applyFinalsRound12_(payload) {
   const finals = web_fetchFinalsRound12_();
   const scores = finals.scores || [];
+  payload.finalsFeed = {
+    detectedPlayers: scores.length,
+    fetchedAt: finals.fetchedAt,
+    parser: finals.debug || ''
+  };
 
   // If PDGA has not populated the Finals feed yet, keep the Sheet snapshot.
   if (!scores.length) return payload;
@@ -193,10 +198,29 @@ function web_applyFinalsRound12_(payload) {
     const pick = web_findPick_(player.entrant, player.player);
     if (!pick) return;
 
-    const feedPlayer = scores.find(p => {
-      const pdga = web_getPdgaNumber_(p);
-      return pdga && String(pdga) === String(pick.pdga);
-    });
+    let feedPlayer = null;
+
+    // Use the same player matcher as the working R1-R4 Sheet whenever available.
+    // It matches PDGA number first, then flexible name/alias variants.
+    if (typeof findPlayer_ === 'function') {
+      feedPlayer = findPlayer_(scores, pick);
+    }
+
+    // Fallback for a standalone endpoint file.
+    if (!feedPlayer) {
+      feedPlayer = scores.find(p => {
+        const pdga = web_getPdgaNumber_(p);
+        if (pdga && String(pdga) === String(pick.pdga)) return true;
+
+        const candidate = web_getField_(p, [
+          'Name', 'name', 'PlayerName', 'playerName',
+          'FullName', 'fullName', 'ShortName', 'shortName'
+        ]);
+
+        return [pick.player].concat(pick.aliases || [])
+          .some(alias => web_namesMatch_(candidate, alias));
+      }) || null;
+    }
 
     player.currentRound = 5;
 
@@ -207,25 +231,25 @@ function web_applyFinalsRound12_(payload) {
       return;
     }
 
-    const played = web_number_(web_getField_(feedPlayer, [
-      'Played', 'played', 'HolesPlayed', 'holesPlayed'
-    ]), 0);
+    const played = typeof number_ === 'function' && typeof getField_ === 'function'
+      ? number_(getField_(feedPlayer, ['Played', 'played', 'HolesPlayed', 'holesPlayed']), 0)
+      : web_number_(web_getField_(feedPlayer, ['Played', 'played', 'HolesPlayed', 'holesPlayed']), 0);
 
-    const holes = web_number_(web_getField_(feedPlayer, [
-      'Holes', 'holes', 'TotalHoles', 'totalHoles'
-    ]), 18);
+    const holes = typeof number_ === 'function' && typeof getField_ === 'function'
+      ? number_(getField_(feedPlayer, ['Holes', 'holes', 'TotalHoles', 'totalHoles']), 18)
+      : web_number_(web_getField_(feedPlayer, ['Holes', 'holes', 'TotalHoles', 'totalHoles']), 18);
 
-    const completed = web_bool_(web_getField_(feedPlayer, [
-      'Completed', 'completed', 'IsComplete', 'isComplete'
-    ]));
+    const completed = typeof bool_ === 'function' && typeof getField_ === 'function'
+      ? bool_(getField_(feedPlayer, ['Completed', 'completed', 'IsComplete', 'isComplete']))
+      : web_bool_(web_getField_(feedPlayer, ['Completed', 'completed', 'IsComplete', 'isComplete']));
 
-    const roundToPar = web_scoreNumber_(web_getField_(feedPlayer, [
-      'RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar', 'RdToPar', 'rdToPar'
-    ]));
+    const roundToPar = typeof scoreNumber_ === 'function' && typeof getField_ === 'function'
+      ? scoreNumber_(getField_(feedPlayer, ['RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar', 'RdToPar', 'rdToPar']))
+      : web_scoreNumber_(web_getField_(feedPlayer, ['RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar', 'RdToPar', 'rdToPar']));
 
-    const cumulative = web_scoreNumber_(web_getField_(feedPlayer, [
-      'ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar', 'Total'
-    ]));
+    const cumulative = typeof scoreNumber_ === 'function' && typeof getField_ === 'function'
+      ? scoreNumber_(getField_(feedPlayer, ['ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar', 'Total']))
+      : web_scoreNumber_(web_getField_(feedPlayer, ['ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar', 'Total']));
 
     // Only put a number into R5 after the player has actually started.
     if (roundToPar !== null && (played > 0 || completed)) {
@@ -241,12 +265,14 @@ function web_applyFinalsRound12_(payload) {
       ? 'F'
       : (played > 0 ? String(played) : '-');
 
-    const runningPlace = web_getField_(feedPlayer, [
-      'RunningPlace', 'runningPlace', 'Place', 'place', 'Position', 'position'
-    ]);
+    const runningPlace = typeof getField_ === 'function'
+      ? getField_(feedPlayer, ['RunningPlace', 'runningPlace', 'Place', 'place', 'Position', 'position'])
+      : web_getField_(feedPlayer, ['RunningPlace', 'runningPlace', 'Place', 'place', 'Position', 'position']);
 
     if (runningPlace !== null && runningPlace !== undefined && runningPlace !== '') {
-      const tied = web_bool_(web_getField_(feedPlayer, ['Tied', 'tied', 'IsTied', 'isTied']));
+      const tied = typeof bool_ === 'function' && typeof getField_ === 'function'
+        ? bool_(getField_(feedPlayer, ['Tied', 'tied', 'IsTied', 'isTied']))
+        : web_bool_(web_getField_(feedPlayer, ['Tied', 'tied', 'IsTied', 'isTied']));
       player.place = (tied ? 'T' : '') + runningPlace;
     }
 
@@ -271,7 +297,7 @@ function web_applyFinalsRound12_(payload) {
 
 function web_fetchFinalsRound12_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_finals_round_12';
+  const cacheKey = 'pdga_picks_finals_round_12_v2';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -280,42 +306,67 @@ function web_fetchFinalsRound12_() {
     } catch (e) {}
   }
 
-  const url =
-    'https://www.pdga.com/apps/tournament/live-api/live_results_fetch_round' +
-    '?TournID=97344&Division=MPO&Round=12';
+  let scores = [];
+  let debug = '';
 
-  const response = UrlFetchApp.fetch(url, {
-    method: 'get',
-    followRedirects: true,
-    muteHttpExceptions: true,
-    headers: {
-      'Accept': 'application/json, text/plain, */*',
-      'User-Agent': 'Mozilla/5.0 (compatible; PDGA-Picks/1.0)',
-      'Referer': 'https://www.pdga.com/live/event/97344/MPO/scores?round=12',
-      'Cache-Control': 'no-cache'
+  // BEST PATH: reuse the exact PDGA fetch/parser that already worked for
+  // Rounds 1-4 in the contest Sheet. fetchRoundRaw_(12) is valid even though
+  // the normal Sheet refresh loop only iterates 1-5.
+  if (
+    typeof fetchRoundRaw_ === 'function' &&
+    typeof extractScoreArray_ === 'function'
+  ) {
+    const result = fetchRoundRaw_(12);
+    if (result && result.json) {
+      scores = extractScoreArray_(result.json) || [];
     }
-  });
+    debug = 'Sheet parser; HTTP ' + (result && result.code);
+  } else {
+    // Fallback only if the endpoint file was somehow installed without
+    // the main contest script in the same Apps Script project.
+    const url =
+      'https://www.pdga.com/apps/tournament/live-api/live_results_fetch_round' +
+      '?TournID=97344&Division=MPO&Round=12';
 
-  if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) {
-    throw new Error('PDGA Finals request returned HTTP ' + response.getResponseCode() + '.');
+    const response = UrlFetchApp.fetch(url, {
+      method: 'get',
+      followRedirects: true,
+      muteHttpExceptions: true,
+      headers: {
+        'Accept': 'application/json, text/plain, */*',
+        'User-Agent': 'Mozilla/5.0 (compatible; PDGA-Picks/1.0)',
+        'Referer': 'https://www.pdga.com/live/event/97344/MPO/scores?round=12',
+        'Cache-Control': 'no-cache'
+      }
+    });
+
+    if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) {
+      throw new Error('PDGA Finals request returned HTTP ' + response.getResponseCode() + '.');
+    }
+
+    let json;
+    try {
+      json = JSON.parse(response.getContentText());
+    } catch (e) {
+      throw new Error('PDGA Finals response was not valid JSON.');
+    }
+
+    scores = web_extractScoreArray_(json);
+    debug = 'Fallback parser; HTTP ' + response.getResponseCode();
   }
 
-  let json;
-  try {
-    json = JSON.parse(response.getContentText());
-  } catch (e) {
-    throw new Error('PDGA Finals response was not valid JSON.');
+  if (!scores.length) {
+    throw new Error('PDGA Finals feed returned no player scores. ' + debug);
   }
 
-  const scores = web_extractScoreArray_(json);
   const result = {
     scores: scores,
-    fetchedAt: new Date().toISOString()
+    fetchedAt: new Date().toISOString(),
+    debug: debug
   };
 
-  // Keep all viewers from independently hitting PDGA every 30 seconds.
   try {
-    cache.put(cacheKey, JSON.stringify(result), 15);
+    cache.put(cacheKey, JSON.stringify(result), 10);
   } catch (e) {}
 
   return result;
