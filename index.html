@@ -276,7 +276,7 @@
         setupPanel.classList.add("hidden");
         liveContent.classList.remove("hidden");
 
-        const finalsBridgeCurrent = payload.bridgeVersion === "finals-v3";
+        const finalsBridgeCurrent = payload.bridgeVersion === "finals-v4";
         statusDot.className = finalsBridgeCurrent ? "dot live" : "dot";
         statusText.textContent = !finalsBridgeCurrent
           ? "Backend update required"
