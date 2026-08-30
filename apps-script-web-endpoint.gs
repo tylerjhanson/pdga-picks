@@ -46,7 +46,7 @@ function doGet(e) {
   } catch (error) {
     payload = {
       ok: false,
-      bridgeVersion: 'direct-v14',
+      bridgeVersion: 'direct-v15',
       error: error && error.message ? error.message : String(error)
     };
   }
@@ -58,7 +58,7 @@ function doGet(e) {
 
 function web8_getPayload_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_direct_v14';
+  const cacheKey = 'pdga_picks_direct_v15';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -137,7 +137,7 @@ function web8_getPayload_() {
     });
 
     const finalsAssignments = currentRound === 5
-      ? web8_buildFinalsAssignmentsV14_(
+      ? web8_buildFinalsAssignmentsV15_(
           roundScores[5],
           updatedScores12,
           roundScores[4],
@@ -177,9 +177,20 @@ function web8_getPayload_() {
           'RdToPar', 'rdToPar'
         ]));
 
+        const verifiedPlayerFinals =
+          round === 5 &&
+          web8_bool_(web8_getField_(found, [
+            'WEB8LiveFinals', 'web8LiveFinals'
+          ]));
+
         if (
           roundToPar !== null &&
-          (round < currentRound || played > 0 || completed)
+          (
+            round < currentRound ||
+            played > 0 ||
+            completed ||
+            verifiedPlayerFinals
+          )
         ) {
           rounds[round - 1] = roundToPar;
           roundSum += roundToPar;
@@ -347,7 +358,7 @@ function web8_getPayload_() {
 
     const payload = {
       ok: true,
-      bridgeVersion: 'direct-v14',
+      bridgeVersion: 'direct-v15',
       eventId: WEB8_EVENT_ID,
       division: WEB8_DIVISION,
       currentRound: currentRound,
@@ -409,7 +420,8 @@ function web8_getPayload_() {
             kyleDbg.fullRowToPar === null || kyleDbg.fullRowToPar === undefined
               ? ''
               : kyleDbg.fullRowToPar,
-          kyleLiveSummary: kyleDbg.liveSummary || {}
+          kyleLiveSummary: kyleDbg.liveSummary || {},
+          kyleResponseProgress: kyleDbg.responseProgress || {}
         };
       })()
     };
@@ -537,7 +549,12 @@ function web8_fetchPlayerLiveBatch_(round4Scores, picks) {
       resultId: resultId == null ? '' : String(resultId),
       http: 0,
       candidateCount: 0,
-      record: null
+      record: null,
+      progress: {
+        played: 0,
+        completed: false,
+        place: ''
+      }
     };
 
     if (resultId === null || resultId === undefined || String(resultId) === '') {
@@ -598,9 +615,157 @@ function web8_fetchPlayerLiveBatch_(round4Scores, picks) {
     const extracted = web8_extractBestPlayerLiveRecord_(json, job.resultId);
     output[job.pick.pdga].candidateCount = extracted.candidateCount;
     output[job.pick.pdga].record = extracted.record;
+
+    const selectedScoreId = extracted.record
+      ? web8_getField_(extracted.record, [
+          'ScoreID', 'scoreId', 'scoreID', 'score_id'
+        ])
+      : null;
+
+    output[job.pick.pdga].progress =
+      web8_extractPlayerLiveProgress_(json, selectedScoreId);
   });
 
   return output;
+}
+
+function web8_extractPlayerLiveProgress_(root, selectedScoreId) {
+  let bestPlayed = 0;
+  let completed = false;
+  let place = '';
+  let bestPlaceQuality = -1;
+
+  function scoreArrayCount(value) {
+    if (!Array.isArray(value)) return 0;
+
+    return value.filter(item => {
+      if (item === null || item === undefined || item === '') return false;
+
+      if (typeof item === 'number') return item > 0;
+
+      if (typeof item === 'string') {
+        const s = item.trim();
+        return s !== '' && s !== '0' && s !== '-' && s !== '·';
+      }
+
+      if (typeof item === 'object') {
+        const score = web8_getField_(item, [
+          'Score', 'score', 'Strokes', 'strokes',
+          'Result', 'result', 'ScoreValue', 'scoreValue'
+        ]);
+
+        return (
+          score !== undefined &&
+          score !== null &&
+          String(score).trim() !== ''
+        );
+      }
+
+      return false;
+    }).length;
+  }
+
+  function walk(node, depth, finalContext) {
+    if (
+      depth > 10 ||
+      node === null ||
+      node === undefined
+    ) {
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      node.slice(0, 500).forEach(item =>
+        walk(item, depth + 1, finalContext)
+      );
+      return;
+    }
+
+    if (typeof node !== 'object') return;
+
+    const round = web8_number_(web8_getField_(node, [
+      'Round', 'round', 'RoundNumber', 'roundNumber'
+    ]), 0);
+
+    const scoreId = web8_getField_(node, [
+      'ScoreID', 'scoreId', 'scoreID', 'score_id'
+    ]);
+
+    const scoreIdMatch =
+      selectedScoreId !== null &&
+      selectedScoreId !== undefined &&
+      String(selectedScoreId) !== '' &&
+      scoreId !== null &&
+      scoreId !== undefined &&
+      String(scoreId) === String(selectedScoreId);
+
+    const isFinalContext =
+      finalContext ||
+      round === 12 ||
+      round === 5 ||
+      scoreIdMatch;
+
+    if (isFinalContext) {
+      const directPlayed = web8_number_(web8_getField_(node, [
+        'Played', 'played', 'HolesPlayed', 'holesPlayed'
+      ]), 0);
+
+      if (directPlayed > bestPlayed) bestPlayed = directPlayed;
+
+      const holeCandidates = [
+        web8_getField_(node, ['HoleScores', 'holeScores']),
+        web8_getField_(node, ['Scores', 'scores']),
+        web8_getField_(node, ['SortScores', 'sortScores'])
+      ];
+
+      holeCandidates.forEach(value => {
+        const count = scoreArrayCount(value);
+        if (count > bestPlayed && count <= 18) bestPlayed = count;
+      });
+
+      if (web8_bool_(web8_getField_(node, [
+        'Completed', 'completed', 'IsComplete', 'isComplete'
+      ]))) {
+        completed = true;
+      }
+
+      const runningPlace = web8_getField_(node, [
+        'RunningPlace', 'runningPlace', 'Place', 'place',
+        'Position', 'position'
+      ]);
+
+      if (
+        runningPlace !== null &&
+        runningPlace !== undefined &&
+        String(runningPlace) !== ''
+      ) {
+        let quality = 1;
+        if (round === 12) quality += 3;
+        if (scoreIdMatch) quality += 4;
+        if (directPlayed > 0) quality += 2;
+
+        if (quality > bestPlaceQuality) {
+          place = runningPlace;
+          bestPlaceQuality = quality;
+        }
+      }
+    }
+
+    Object.keys(node).forEach(key => {
+      const child = node[key];
+      if (child && typeof child === 'object') {
+        walk(child, depth + 1, isFinalContext);
+      }
+    });
+  }
+
+  walk(root, 0, false);
+
+  return {
+    played: bestPlayed,
+    completed: completed,
+    place: place
+  };
 }
 
 function web8_extractBestPlayerLiveRecord_(root, requestedResultId) {
@@ -882,7 +1047,7 @@ function web8_identityRowCount_(scores) {
   }).length;
 }
 
-function web8_buildFinalsAssignmentsV14_(round12Scores, updatedScores, round4Scores, picks) {
+function web8_buildFinalsAssignmentsV15_(round12Scores, updatedScores, round4Scores, picks) {
   const assignments = {};
   const playerBatch = web8_fetchPlayerLiveBatch_(round4Scores, picks);
 
@@ -986,16 +1151,41 @@ function web8_buildFinalsAssignmentsV14_(round12Scores, updatedScores, round4Sco
       }
     }
 
-    const derivedPlayed = web8_derivePlayedFromScores_(fallback);
+    const infoProgress = info.progress || {};
+    const derivedPlayed = Math.max(
+      web8_derivePlayedFromScores_(fallback),
+      web8_number_(infoProgress.played, 0)
+    );
+
     if (derivedPlayed > 0) {
       fallback.Played = derivedPlayed;
     }
+
+    if (infoProgress.completed) {
+      fallback.Completed = true;
+    }
+
+    if (
+      (fallback.RunningPlace === undefined ||
+       fallback.RunningPlace === null ||
+       fallback.RunningPlace === '') &&
+      infoProgress.place !== undefined &&
+      infoProgress.place !== null &&
+      String(infoProgress.place) !== ''
+    ) {
+      fallback.RunningPlace = infoProgress.place;
+    }
+
+    // This is a verified player-specific Round-12 score record.
+    // Its RoundtoPar is valid even when PDGA leaves Played=0.
+    fallback.WEB8LiveFinals = true;
 
     assign(pick, fallback, 'player-resultid-live', -1);
   });
 
   const kyleInfo = playerBatch['85132'] || {};
   const kyleRecord = kyleInfo.record || null;
+  const kyleProgress = kyleInfo.progress || {};
   const kyleFull = kyleRecord
     ? web8_matchPlayerRecordToRound12_(kyleRecord, round12Scores || [])
     : null;
@@ -1064,7 +1254,16 @@ function web8_buildFinalsAssignmentsV14_(round12Scores, updatedScores, round4Sco
               'ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar'
             ]))
           : null,
-        liveSummary: web8_liveRecordSummary_(kyleRecord)
+        liveSummary: web8_liveRecordSummary_(kyleRecord),
+        responseProgress: {
+          played: web8_number_(kyleProgress.played, 0),
+          completed: !!kyleProgress.completed,
+          place:
+            kyleProgress.place === null ||
+            kyleProgress.place === undefined
+              ? ''
+              : String(kyleProgress.place)
+        }
       }
     },
     enumerable: false
