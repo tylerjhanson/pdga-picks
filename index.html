@@ -70,7 +70,6 @@
     .setup h2{margin:0 0 8px;font-size:1.2rem}
     .setup p{margin:6px 0;color:var(--muted);line-height:1.45}
     .setup code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text)}
-    .live-debug{margin:0 0 12px;padding:9px 11px;border:1px dashed var(--line);border-radius:10px;background:var(--card2);color:var(--muted);font-size:.72rem;line-height:1.4;word-break:break-word}
     .footer{display:flex;justify-content:center;padding:18px 0 4px}
     .pdga-link{color:var(--accent);font-size:.84rem;font-weight:750}
     .hidden{display:none!important}
@@ -117,7 +116,6 @@
     </section>
 
     <section id="liveContent" class="hidden">
-      <div id="liveDebug" class="live-debug"></div>
       <div class="cards" id="cards"></div>
     </section>
 
@@ -366,109 +364,6 @@
           $("cards").innerHTML = "";
         }
         updatedText.textContent = payload.updatedAt ? "Updated " + niceTime(payload.updatedAt) : "";
-        const finalsDiag = Array.isArray(payload.feedDiagnostics)
-          ? payload.feedDiagnostics.find(d => Number(d.contestRound) === 5)
-          : null;
-        const kyle = players.find(p => p.player === "Kyle Klein");
-        const kyleR5 = kyle && Array.isArray(kyle.rounds) ? kyle.rounds[4] : null;
-        const debugBits = [
-          "Build: debug-17 · Backend: " + esc(payload.bridgeVersion || "unknown"),
-          finalsDiag
-            ? "R5/API " + esc(finalsDiag.apiRound) +
-              ": " + esc(finalsDiag.players) + " players, live=" + esc(finalsDiag.realScoring)
-            : "R5 feed diagnostic unavailable",
-          kyle
-            ? "Kyle: R5 " + score(kyleR5) +
-              "" +
-              " · " + esc(kyle.thru || "-") +
-              " · total " + score(kyle.total) +
-              (kyle._totalRebuiltFromRounds ? " (sum of rounds)" : "")
-            : "Kyle: not returned",
-          payload.matchDiagnostics
-            ? "Kyle match=" + esc(payload.matchDiagnostics.kyleFinalsMatched) +
-              " · method=" + esc(payload.matchDiagnostics.kyleMethod || "-") +
-              " · assigned=" + esc(payload.matchDiagnostics.assignedFinalists) +
-              " · API12=" + esc(payload.matchDiagnostics.api12Players) +
-              " / IDs=" + esc(payload.matchDiagnostics.api12IdentityRows) +
-              " · updated=" + esc(payload.matchDiagnostics.updatedHttp) +
-              " / rows=" + esc(payload.matchDiagnostics.updatedPlayers) +
-              " / IDs=" + esc(payload.matchDiagnostics.updatedIdentityRows) +
-              " · oldResultID=" + esc(payload.matchDiagnostics.kyleResultId || "-") +
-              " · playerHTTP=" + esc(payload.matchDiagnostics.kylePlayerHttp) +
-              " · candidates=" + esc(payload.matchDiagnostics.kylePlayerCandidates) +
-              " · selectedRound=" + esc(payload.matchDiagnostics.kyleSelectedRound || "-") +
-              " · newResultID=" + esc(payload.matchDiagnostics.kyleSelectedResultId || "-") +
-              " · scoreID=" + esc(payload.matchDiagnostics.kyleSelectedScoreId || "-") +
-              " · deepScoreIDMatches=" + esc(payload.matchDiagnostics.kyleDeepScoreIdMatches) +
-              " · fullRow=" + esc(payload.matchDiagnostics.kyleFullRowMatched) +
-              " / " + esc(payload.matchDiagnostics.kyleFullRowMethod || "-") +
-              " / index=" + esc(payload.matchDiagnostics.kyleFullRowIndex) +
-              " · played=" + esc(
-                payload.matchDiagnostics.kyleFullRowPlayed === "" ||
-                payload.matchDiagnostics.kyleFullRowPlayed === null ||
-                payload.matchDiagnostics.kyleFullRowPlayed === undefined
-                  ? "-"
-                  : payload.matchDiagnostics.kyleFullRowPlayed
-              ) +
-              " · R5=" + esc(
-                payload.matchDiagnostics.kyleFullRowRoundToPar === "" ||
-                payload.matchDiagnostics.kyleFullRowRoundToPar === null ||
-                payload.matchDiagnostics.kyleFullRowRoundToPar === undefined
-                  ? "-"
-                  : payload.matchDiagnostics.kyleFullRowRoundToPar
-              ) +
-              " · total=" + esc(
-                payload.matchDiagnostics.kyleFullRowToPar === "" ||
-                payload.matchDiagnostics.kyleFullRowToPar === null ||
-                payload.matchDiagnostics.kyleFullRowToPar === undefined
-                  ? "-"
-                  : payload.matchDiagnostics.kyleFullRowToPar
-              ) +
-              (payload.matchDiagnostics.kyleLiveSummary
-                ? " · livePlayedRaw=" + esc(
-                    payload.matchDiagnostics.kyleLiveSummary.playedRaw === null ||
-                    payload.matchDiagnostics.kyleLiveSummary.playedRaw === undefined ||
-                    payload.matchDiagnostics.kyleLiveSummary.playedRaw === ""
-                      ? "-"
-                      : payload.matchDiagnostics.kyleLiveSummary.playedRaw
-                  ) +
-                  " · derivedPlayed=" + esc(
-                    payload.matchDiagnostics.kyleLiveSummary.derivedPlayed || 0
-                  ) +
-                  " · livePlace=" + esc(
-                    payload.matchDiagnostics.kyleLiveSummary.runningPlace === null ||
-                    payload.matchDiagnostics.kyleLiveSummary.runningPlace === undefined ||
-                    payload.matchDiagnostics.kyleLiveSummary.runningPlace === ""
-                      ? "-"
-                      : payload.matchDiagnostics.kyleLiveSummary.runningPlace
-                  )
-                : "") +
-              (payload.matchDiagnostics.kyleResponseProgress
-                ? " · responsePlayed=" + esc(
-                    payload.matchDiagnostics.kyleResponseProgress.played || 0
-                  ) +
-                  " · responseCompleted=" + esc(
-                    payload.matchDiagnostics.kyleResponseProgress.completed
-                  ) +
-                  " · responsePlace=" + esc(
-                    payload.matchDiagnostics.kyleResponseProgress.place || "-"
-                  )
-                : "") +
-              (payload.matchDiagnostics.kyleUpdatedProgress
-                ? " · updatedPlayed=" + esc(
-                    payload.matchDiagnostics.kyleUpdatedProgress.played || 0
-                  ) +
-                  " · updatedCompleted=" + esc(
-                    payload.matchDiagnostics.kyleUpdatedProgress.completed
-                  ) +
-                  " · updatedPlace=" + esc(
-                    payload.matchDiagnostics.kyleUpdatedProgress.place || "-"
-                  )
-                : "")
-            : "Kyle match diagnostic unavailable"
-        ];
-        $("liveDebug").innerHTML = debugBits.join(" &nbsp;·&nbsp; ");
-
 
         if (!finalsBridgeCurrent) return;
 
