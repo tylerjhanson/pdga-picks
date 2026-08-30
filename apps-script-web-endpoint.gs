@@ -46,7 +46,7 @@ function doGet(e) {
   } catch (error) {
     payload = {
       ok: false,
-      bridgeVersion: 'direct-v9',
+      bridgeVersion: 'direct-v10',
       error: error && error.message ? error.message : String(error)
     };
   }
@@ -58,7 +58,7 @@ function doGet(e) {
 
 function web8_getPayload_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_direct_v9';
+  const cacheKey = 'pdga_picks_direct_v10';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -79,10 +79,9 @@ function web8_getPayload_() {
     const roundRaw = {};
     const diagnostics = [];
 
-    // Contest R1-R4 map normally. Contest R5 is PDGA's special Finals/API 12.
-    for (let contestRound = 1; contestRound <= 5; contestRound++) {
-      const apiRound = contestRound === 5 ? 12 : contestRound;
-      const fetched = web8_fetchRound_(apiRound);
+    // R1-R4 map normally.
+    for (let contestRound = 1; contestRound <= 4; contestRound++) {
+      const fetched = web8_fetchRound_(contestRound);
       const scores = web8_extractScores_(fetched.json);
 
       roundScores[contestRound] = scores;
@@ -90,12 +89,57 @@ function web8_getPayload_() {
 
       diagnostics.push({
         contestRound: contestRound,
-        apiRound: apiRound,
+        apiRound: contestRound,
         http: fetched.code,
         players: scores.length,
-        realScoring: web8_roundHasRealScoring_(scores)
+        realScoring: web8_roundHasRealScoring_(scores),
+        identityRows: web8_identityRowCount_(scores)
       });
     }
+
+    // Finals: fetch both the normal Round 5 endpoint and PDGA's Finals alias (12).
+    // Round 5 may retain identity even when Round 12 blanks it.
+    const fetched5 = web8_fetchRound_(5);
+    const scores5 = web8_extractScores_(fetched5.json);
+
+    const fetched12 = web8_fetchRound_(12);
+    const scores12 = web8_extractScores_(fetched12.json);
+
+    const r5Real = web8_roundHasRealScoring_(scores5);
+    const r12Real = web8_roundHasRealScoring_(scores12);
+    const r5Identity = web8_identityRowCount_(scores5);
+    const r12Identity = web8_identityRowCount_(scores12);
+
+    const finalsChoice = web8_chooseFinalsSource_(
+      scores5,
+      scores12,
+      WEB8_PICKS
+    );
+
+    roundScores[5] = finalsChoice.scores;
+    roundRaw[5] = {
+      api5: fetched5.json,
+      api12: fetched12.json,
+      source: finalsChoice.source,
+      bridge: finalsChoice.bridge
+    };
+
+    diagnostics.push({
+      contestRound: 5,
+      apiRound: finalsChoice.source === 'api5' ? 5 : 12,
+      http: finalsChoice.source === 'api5' ? fetched5.code : fetched12.code,
+      players: finalsChoice.scores.length,
+      realScoring: web8_roundHasRealScoring_(finalsChoice.scores),
+      identityRows: web8_identityRowCount_(finalsChoice.scores),
+      api5Players: scores5.length,
+      api5RealScoring: r5Real,
+      api5IdentityRows: r5Identity,
+      api12Players: scores12.length,
+      api12RealScoring: r12Real,
+      api12IdentityRows: r12Identity,
+      finalsSource: finalsChoice.source,
+      bridgeMethod: finalsChoice.bridgeMethod
+    });
 
     let currentRound = 1;
 
@@ -111,12 +155,7 @@ function web8_getPayload_() {
     });
 
     const finalsAssignments = currentRound === 5
-      ? web8_buildFinalsAssignments_(
-          roundScores[5],
-          roundRaw[5],
-          WEB8_PICKS,
-          roundScores[4]
-        )
+      ? web8_buildDirectFinalsAssignments_(roundScores[5], WEB8_PICKS)
       : {};
 
     const players = WEB8_PICKS.map((pick, order) => {
@@ -321,7 +360,7 @@ function web8_getPayload_() {
 
     const payload = {
       ok: true,
-      bridgeVersion: 'direct-v9',
+      bridgeVersion: 'direct-v10',
       eventId: WEB8_EVENT_ID,
       division: WEB8_DIVISION,
       currentRound: currentRound,
@@ -341,17 +380,21 @@ function web8_getPayload_() {
       feedDiagnostics: diagnostics,
       matchDiagnostics: (() => {
         const kyleAssignment = finalsAssignments['85132'] || null;
+        const finalsDiag = diagnostics.find(d => d.contestRound === 5) || {};
+
         return {
           kyleFinalsMatched: !!kyleAssignment,
           kyleMethod: kyleAssignment ? kyleAssignment.method : '',
           kyleFinalsIndex: kyleAssignment ? kyleAssignment.index : null,
           assignedFinalists: Object.keys(finalsAssignments).length,
-          kyleR4ResultId: finalsAssignments._debug
-            ? finalsAssignments._debug.kyleR4ResultId
-            : '',
-          kyleResultIdMatches: finalsAssignments._debug
-            ? finalsAssignments._debug.kyleResultIdMatches
-            : 0
+          finalsSource: finalsDiag.finalsSource || '',
+          bridgeMethod: finalsDiag.bridgeMethod || '',
+          api5Players: finalsDiag.api5Players || 0,
+          api5RealScoring: !!finalsDiag.api5RealScoring,
+          api5IdentityRows: finalsDiag.api5IdentityRows || 0,
+          api12Players: finalsDiag.api12Players || 0,
+          api12RealScoring: !!finalsDiag.api12RealScoring,
+          api12IdentityRows: finalsDiag.api12IdentityRows || 0
         };
       })()
     };
@@ -594,124 +637,178 @@ function web8_collectScalarValues_(value, out, depth) {
   }
 }
 
-function web8_buildFinalsAssignments_(scores, rawRoot, picks, round4Scores) {
-  const assignments = {};
-  const used = {};
-  const scoreList = scores || [];
+function web8_identityRowCount_(scores) {
+  return (scores || []).filter(row => {
+    const name = web8_getPlayerName_(row);
+    const pdga = web8_getPdgaNumber_(row);
+    return !!(String(name || '').trim() || String(pdga || '').trim());
+  }).length;
+}
 
-  function assign(pick, index, method, resultId) {
-    if (!pick || index === null || index === undefined) return false;
-    if (index < 0 || index >= scoreList.length) return false;
-    if (used[index] || assignments[pick.pdga]) return false;
+function web8_chooseFinalsSource_(scores5, scores12, picks) {
+  const real5 = web8_roundHasRealScoring_(scores5);
+  const real12 = web8_roundHasRealScoring_(scores12);
+  const id5 = web8_identityRowCount_(scores5);
+  const id12 = web8_identityRowCount_(scores12);
+
+  // Best case: normal API Round 5 is live and has player identity.
+  if (real5 && id5 > 0) {
+    return {
+      scores: scores5,
+      source: 'api5',
+      bridge: false,
+      bridgeMethod: 'api5-direct'
+    };
+  }
+
+  // Next best: Finals/API12 itself has usable identity.
+  if (real12 && id12 > 0) {
+    return {
+      scores: scores12,
+      source: 'api12',
+      bridge: false,
+      bridgeMethod: 'api12-direct'
+    };
+  }
+
+  // If Round 5 has identity and the two feeds have the same row count,
+  // copy only identity fields from API5 into the corresponding live API12 row.
+  if (
+    real12 &&
+    id5 > 0 &&
+    scores5.length === scores12.length &&
+    scores12.length > 0
+  ) {
+    const bridged = scores12.map((liveRow, index) =>
+      web8_mergeIdentity_(liveRow, scores5[index])
+    );
+
+    return {
+      scores: bridged,
+      source: 'api12',
+      bridge: true,
+      bridgeMethod: 'api5-index-to-api12'
+    };
+  }
+
+  // If row counts differ, try stable score-record identifiers from API5 -> API12.
+  if (real12 && id5 > 0) {
+    const bridged = scores12.map(row => Object.assign({}, row));
+    let matched = 0;
+
+    (scores5 || []).forEach(identityRow => {
+      const identity = web8_identityValues_(identityRow);
+      if (!identity.name && !identity.pdga) return;
+
+      const index = web8_findMatchingFinalsRowByIds_(bridged, identityRow);
+      if (index >= 0) {
+        bridged[index] = web8_mergeIdentity_(bridged[index], identityRow);
+        matched++;
+      }
+    });
+
+    if (matched > 0) {
+      return {
+        scores: bridged,
+        source: 'api12',
+        bridge: true,
+        bridgeMethod: 'api5-id-to-api12'
+      };
+    }
+  }
+
+  return {
+    scores: real12 ? scores12 : scores5,
+    source: real12 ? 'api12' : 'api5',
+    bridge: false,
+    bridgeMethod: 'unbridged'
+  };
+}
+
+function web8_identityValues_(row) {
+  return {
+    name: web8_getPlayerName_(row) || '',
+    pdga: web8_getPdgaNumber_(row) || ''
+  };
+}
+
+function web8_mergeIdentity_(liveRow, identityRow) {
+  const out = Object.assign({}, liveRow || {});
+  if (!identityRow || typeof identityRow !== 'object') return out;
+
+  [
+    'FirstName','LastName','Name','ShortName',
+    'PDGANum','HasPDGANum','ProfileURL','AvatarURL',
+    'City','StateProv','Country','Nationality','Rating'
+  ].forEach(key => {
+    const value = web8_getField_(identityRow, [key]);
+    if (value !== undefined && value !== null && value !== '') {
+      out[key] = value;
+    }
+  });
+
+  return out;
+}
+
+function web8_findMatchingFinalsRowByIds_(finalsRows, identityRow) {
+  const keys = [
+    'ScoreID','RoundID','ResultID','LayoutID',
+    'CardNum','TeeTimeSort'
+  ];
+
+  const source = {};
+  keys.forEach(key => {
+    const value = web8_getField_(identityRow, [key]);
+    if (value !== undefined && value !== null && value !== '') {
+      source[key] = String(value);
+    }
+  });
+
+  let bestIndex = -1;
+  let bestStrength = 0;
+  let tiedBest = false;
+
+  (finalsRows || []).forEach((row, index) => {
+    let strength = 0;
+
+    Object.keys(source).forEach(key => {
+      const value = web8_getField_(row, [key]);
+      if (
+        value !== undefined &&
+        value !== null &&
+        value !== '' &&
+        String(value) === source[key]
+      ) {
+        strength++;
+      }
+    });
+
+    if (strength > bestStrength) {
+      bestStrength = strength;
+      bestIndex = index;
+      tiedBest = false;
+    } else if (strength > 0 && strength === bestStrength) {
+      tiedBest = true;
+    }
+  });
+
+  return bestStrength > 0 && !tiedBest ? bestIndex : -1;
+}
+
+function web8_buildDirectFinalsAssignments_(scores, picks) {
+  const assignments = {};
+
+  (picks || []).forEach(pick => {
+    const found = web8_findPlayer_(scores || [], pick);
+    if (!found) return;
+
+    const index = (scores || []).indexOf(found);
 
     assignments[pick.pdga] = {
-      player: scoreList[index],
+      player: found,
       index: index,
-      method: method,
-      resultId: resultId == null ? '' : String(resultId)
+      method: 'direct-after-source-selection'
     };
-    used[index] = true;
-    return true;
-  }
-
-  // 1) Best Finals join: ResultID is the event-result record and should
-  // remain stable for a player across rounds, even when Finals blanks
-  // Name / PDGANum / ProfileURL.
-  picks.forEach(pick => {
-    const r4 = web8_findPlayer_(round4Scores || [], pick);
-    if (!r4) return;
-
-    const r4ResultId = web8_getField_(r4, [
-      'ResultID', 'resultId', 'resultID', 'result_id'
-    ]);
-
-    if (
-      r4ResultId === null ||
-      r4ResultId === undefined ||
-      String(r4ResultId) === ''
-    ) {
-      return;
-    }
-
-    const matches = [];
-
-    scoreList.forEach((row, index) => {
-      const finalsResultId = web8_getField_(row, [
-        'ResultID', 'resultId', 'resultID', 'result_id'
-      ]);
-
-      if (
-        finalsResultId !== null &&
-        finalsResultId !== undefined &&
-        String(finalsResultId) === String(r4ResultId)
-      ) {
-        matches.push(index);
-      }
-    });
-
-    if (matches.length === 1) {
-      assign(pick, matches[0], 'result-id', r4ResultId);
-    }
-  });
-
-  // 2) Direct identity fallback in case PDGA later restores Finals names/PDGA.
-  picks.forEach(pick => {
-    if (assignments[pick.pdga]) return;
-
-    const matches = [];
-
-    scoreList.forEach((row, index) => {
-      if (used[index]) return;
-      if (web8_findPlayer_([row], pick)) matches.push(index);
-    });
-
-    if (matches.length === 1) {
-      assign(pick, matches[0], 'direct', '');
-    }
-  });
-
-  // Diagnostics for Kyle: show the R4 ResultID and how many Finals rows
-  // carry that exact same ResultID.
-  const kylePick = picks.find(p => String(p.pdga) === '85132');
-  const kyleR4 = kylePick
-    ? web8_findPlayer_(round4Scores || [], kylePick)
-    : null;
-
-  const kyleR4ResultId = kyleR4
-    ? web8_getField_(kyleR4, [
-        'ResultID', 'resultId', 'resultID', 'result_id'
-      ])
-    : null;
-
-  let kyleResultIdMatches = 0;
-
-  if (
-    kyleR4ResultId !== null &&
-    kyleR4ResultId !== undefined &&
-    String(kyleR4ResultId) !== ''
-  ) {
-    scoreList.forEach(row => {
-      const finalsResultId = web8_getField_(row, [
-        'ResultID', 'resultId', 'resultID', 'result_id'
-      ]);
-
-      if (
-        finalsResultId !== null &&
-        finalsResultId !== undefined &&
-        String(finalsResultId) === String(kyleR4ResultId)
-      ) {
-        kyleResultIdMatches++;
-      }
-    });
-  }
-
-  Object.defineProperty(assignments, '_debug', {
-    value: {
-      kyleR4ResultId:
-        kyleR4ResultId == null ? '' : String(kyleR4ResultId),
-      kyleResultIdMatches: kyleResultIdMatches
-    },
-    enumerable: false
   });
 
   return assignments;
