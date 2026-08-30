@@ -46,7 +46,7 @@ function doGet(e) {
   } catch (error) {
     payload = {
       ok: false,
-      bridgeVersion: 'direct-v13',
+      bridgeVersion: 'direct-v14',
       error: error && error.message ? error.message : String(error)
     };
   }
@@ -58,7 +58,7 @@ function doGet(e) {
 
 function web8_getPayload_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_direct_v13';
+  const cacheKey = 'pdga_picks_direct_v14';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -137,7 +137,7 @@ function web8_getPayload_() {
     });
 
     const finalsAssignments = currentRound === 5
-      ? web8_buildFinalsAssignmentsV13_(
+      ? web8_buildFinalsAssignmentsV14_(
           roundScores[5],
           updatedScores12,
           roundScores[4],
@@ -347,7 +347,7 @@ function web8_getPayload_() {
 
     const payload = {
       ok: true,
-      bridgeVersion: 'direct-v13',
+      bridgeVersion: 'direct-v14',
       eventId: WEB8_EVENT_ID,
       division: WEB8_DIVISION,
       currentRound: currentRound,
@@ -408,7 +408,8 @@ function web8_getPayload_() {
           kyleFullRowToPar:
             kyleDbg.fullRowToPar === null || kyleDbg.fullRowToPar === undefined
               ? ''
-              : kyleDbg.fullRowToPar
+              : kyleDbg.fullRowToPar,
+          kyleLiveSummary: kyleDbg.liveSummary || {}
         };
       })()
     };
@@ -881,7 +882,7 @@ function web8_identityRowCount_(scores) {
   }).length;
 }
 
-function web8_buildFinalsAssignmentsV13_(round12Scores, updatedScores, round4Scores, picks) {
+function web8_buildFinalsAssignmentsV14_(round12Scores, updatedScores, round4Scores, picks) {
   const assignments = {};
   const playerBatch = web8_fetchPlayerLiveBatch_(round4Scores, picks);
 
@@ -950,7 +951,9 @@ function web8_buildFinalsAssignmentsV13_(round12Scores, updatedScores, round4Sco
       return;
     }
 
-    // Safe fallback: use the player endpoint record itself, but restore identity.
+    // Safe fallback: use the player endpoint record itself. It has the correct
+    // live Finals round score even when the full anonymous leaderboard cannot
+    // be joined back to it.
     const fallback = Object.assign({}, playerRecord);
     fallback.Name = pick.player;
     fallback.PDGANum = pick.pdga;
@@ -969,9 +972,26 @@ function web8_buildFinalsAssignmentsV13_(round12Scores, updatedScores, round4Sco
             fallback[key] = value;
           }
         });
+
+      const r4ToPar = web8_scoreNumber_(web8_getField_(r4, [
+        'ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar'
+      ]));
+
+      const finalsRoundToPar = web8_scoreNumber_(web8_getField_(fallback, [
+        'RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar'
+      ]));
+
+      if (r4ToPar !== null && finalsRoundToPar !== null) {
+        fallback.ToPar = r4ToPar + finalsRoundToPar;
+      }
     }
 
-    assign(pick, fallback, 'player-resultid-fallback', -1);
+    const derivedPlayed = web8_derivePlayedFromScores_(fallback);
+    if (derivedPlayed > 0) {
+      fallback.Played = derivedPlayed;
+    }
+
+    assign(pick, fallback, 'player-resultid-live', -1);
   });
 
   const kyleInfo = playerBatch['85132'] || {};
@@ -1043,13 +1063,98 @@ function web8_buildFinalsAssignmentsV13_(round12Scores, updatedScores, round4Sco
           ? web8_scoreNumber_(web8_getField_(kyleFull.record, [
               'ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar'
             ]))
-          : null
+          : null,
+        liveSummary: web8_liveRecordSummary_(kyleRecord)
       }
     },
     enumerable: false
   });
 
   return assignments;
+}
+
+function web8_derivePlayedFromScores_(record) {
+  if (!record || typeof record !== 'object') return 0;
+
+  const directPlayed = web8_number_(web8_getField_(record, [
+    'Played', 'played', 'HolesPlayed', 'holesPlayed'
+  ]), 0);
+
+  if (directPlayed > 0) return directPlayed;
+
+  const candidates = [
+    web8_getField_(record, ['HoleScores', 'holeScores']),
+    web8_getField_(record, ['Scores', 'scores']),
+    web8_getField_(record, ['SortScores', 'sortScores'])
+  ];
+
+  let best = 0;
+
+  candidates.forEach(value => {
+    if (Array.isArray(value)) {
+      const count = value.filter(item => {
+        if (item === null || item === undefined || item === '') return false;
+        if (typeof item === 'number') return item > 0;
+        if (typeof item === 'string') {
+          const s = item.trim();
+          return s !== '' && s !== '0' && s !== '-' && s !== '·';
+        }
+        if (typeof item === 'object') {
+          const score = web8_getField_(item, [
+            'Score', 'score', 'Strokes', 'strokes', 'Result', 'result'
+          ]);
+          return score !== undefined && score !== null && String(score) !== '';
+        }
+        return false;
+      }).length;
+
+      if (count > best) best = count;
+      return;
+    }
+
+    if (typeof value === 'string') {
+      const parts = value
+        .split(/[|,;\s]+/)
+        .map(x => x.trim())
+        .filter(x => x && x !== '0' && x !== '-' && x !== '·');
+
+      if (parts.length > best) best = parts.length;
+    }
+  });
+
+  return best;
+}
+
+function web8_liveRecordSummary_(record) {
+  if (!record || typeof record !== 'object') return {};
+
+  const keys = Object.keys(record);
+
+  return {
+    keys: keys.slice(0, 80),
+    playedRaw: web8_getField_(record, [
+      'Played', 'played', 'HolesPlayed', 'holesPlayed'
+    ]),
+    derivedPlayed: web8_derivePlayedFromScores_(record),
+    roundToPar: web8_scoreNumber_(web8_getField_(record, [
+      'RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar'
+    ])),
+    toPar: web8_scoreNumber_(web8_getField_(record, [
+      'ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar'
+    ])),
+    runningPlace: web8_getField_(record, [
+      'RunningPlace', 'runningPlace', 'Place', 'place'
+    ]),
+    completed: web8_getField_(record, [
+      'Completed', 'completed', 'IsComplete', 'isComplete'
+    ]),
+    holeScoresType: typeof web8_getField_(record, [
+      'HoleScores', 'holeScores'
+    ]),
+    scoresType: typeof web8_getField_(record, [
+      'Scores', 'scores'
+    ])
+  };
 }
 
 function web8_objectContainsExactFieldValue_(value, names, wantedValue, maxDepth) {
