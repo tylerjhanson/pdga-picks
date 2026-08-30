@@ -46,7 +46,7 @@ function doGet(e) {
   } catch (error) {
     payload = {
       ok: false,
-      bridgeVersion: 'direct-v7',
+      bridgeVersion: 'direct-v8',
       error: error && error.message ? error.message : String(error)
     };
   }
@@ -58,7 +58,7 @@ function doGet(e) {
 
 function web8_getPayload_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_direct_v7';
+  const cacheKey = 'pdga_picks_direct_v8';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -111,7 +111,12 @@ function web8_getPayload_() {
     });
 
     const finalsAssignments = currentRound === 5
-      ? web8_buildFinalsAssignments_(roundScores[5], roundRaw[5], WEB8_PICKS)
+      ? web8_buildFinalsAssignments_(
+          roundScores[5],
+          roundRaw[5],
+          WEB8_PICKS,
+          roundScores[4]
+        )
       : {};
 
     const players = WEB8_PICKS.map((pick, order) => {
@@ -316,7 +321,7 @@ function web8_getPayload_() {
 
     const payload = {
       ok: true,
-      bridgeVersion: 'direct-v7',
+      bridgeVersion: 'direct-v8',
       eventId: WEB8_EVENT_ID,
       division: WEB8_DIVISION,
       currentRound: currentRound,
@@ -341,18 +346,9 @@ function web8_getPayload_() {
           kyleMethod: kyleAssignment ? kyleAssignment.method : '',
           kyleFinalsIndex: kyleAssignment ? kyleAssignment.index : null,
           assignedFinalists: Object.keys(finalsAssignments).length,
-          dataKeys: finalsAssignments._debug
-            ? finalsAssignments._debug.dataKeys
-            : [],
           scoreKeys: finalsAssignments._debug
             ? finalsAssignments._debug.scoreKeys
-            : [],
-          identityPaths: finalsAssignments._debug
-            ? finalsAssignments._debug.identityPaths
-            : [],
-          identityRecordCount: finalsAssignments._debug
-            ? finalsAssignments._debug.identityRecordCount
-            : 0
+            : []
         };
       })()
     };
@@ -595,12 +591,10 @@ function web8_collectScalarValues_(value, out, depth) {
   }
 }
 
-function web8_buildFinalsAssignments_(scores, rawRoot, picks) {
+function web8_buildFinalsAssignments_(scores, rawRoot, picks, round4Scores) {
   const assignments = {};
   const used = {};
   const scoreList = scores || [];
-  const schema = web8_getFinalsSchema_(rawRoot, scoreList);
-  const identityRecords = schema.identityRecords;
 
   function assign(pick, index, method) {
     if (!pick || index === null || index === undefined) return false;
@@ -616,66 +610,138 @@ function web8_buildFinalsAssignments_(scores, rawRoot, picks) {
     return true;
   }
 
-  // 1) Direct match if a Finals score row exposes identity.
+  // 1) Direct identity, if PDGA happens to expose it.
   picks.forEach(pick => {
     const matches = [];
+
     scoreList.forEach((row, index) => {
-      if (web8_recordMatchesPickFast_(row, pick)) matches.push(index);
+      if (web8_findPlayer_([row], pick)) matches.push(index);
     });
-    if (matches.length === 1) assign(pick, matches[0], 'direct-score');
+
+    if (matches.length === 1) {
+      assign(pick, matches[0], 'direct');
+    }
   });
 
-  // 2) Match pick -> shallow identity record -> unique shared token -> score row.
+  // 2) Finals identity fallback:
+  // Match the Finals row to the player's Round 4 fingerprint.
+  // Finals exposes PreviousPlace / PrevRndTotal / Rating even when
+  // Name and PDGANum are unavailable.
   picks.forEach(pick => {
     if (assignments[pick.pdga]) return;
 
-    const matchingIdentity = identityRecords.filter(item =>
-      web8_recordMatchesPickFast_(item.record, pick)
-    );
+    const r4 = web8_findPlayer_(round4Scores || [], pick);
+    if (!r4) return;
 
-    if (matchingIdentity.length !== 1) return;
+    const r4Place = web8_plainNumber_(web8_getField_(r4, [
+      'RunningPlace', 'runningPlace', 'Place', 'place'
+    ]));
 
-    const identity = matchingIdentity[0];
-    const tokens = web8_getJoinTokensFast_(identity.record, identity.mapKey);
-    const candidateIndexes = {};
+    const r4Rating = web8_plainNumber_(web8_getField_(r4, [
+      'Rating', 'rating', 'PlayerRating', 'playerRating'
+    ]));
 
-    tokens.forEach(token => {
-      const matches = [];
+    const r4GrandTotal = web8_plainNumber_(web8_getField_(r4, [
+      'GrandTotal', 'grandTotal',
+      'RunningTotalScore', 'runningTotalScore',
+      'TotalScore', 'totalScore'
+    ]));
 
-      scoreList.forEach((row, index) => {
-        if (used[index]) return;
-        if (web8_scoreRowHasTokenFast_(row, token)) matches.push(index);
-      });
+    const candidates = [];
 
-      if (matches.length === 1) {
-        const index = matches[0];
-        candidateIndexes[index] = (candidateIndexes[index] || 0) + 1;
+    scoreList.forEach((row, index) => {
+      if (used[index]) return;
+
+      const previousPlace = web8_plainNumber_(web8_getField_(row, [
+        'PreviousPlace', 'previousPlace', 'PrevPlace', 'prevPlace'
+      ]));
+
+      const rating = web8_plainNumber_(web8_getField_(row, [
+        'Rating', 'rating', 'PlayerRating', 'playerRating'
+      ]));
+
+      const prevRndTotal = web8_plainNumber_(web8_getField_(row, [
+        'PrevRndTotal', 'prevRndTotal', 'PreviousRoundTotal', 'previousRoundTotal'
+      ]));
+
+      let strength = 0;
+      let matchedPlace = false;
+      let matchedRating = false;
+      let matchedTotal = false;
+
+      if (
+        r4Place !== null &&
+        previousPlace !== null &&
+        r4Place === previousPlace
+      ) {
+        strength += 5;
+        matchedPlace = true;
+      }
+
+      if (
+        r4Rating !== null &&
+        rating !== null &&
+        r4Rating === rating
+      ) {
+        strength += 4;
+        matchedRating = true;
+      }
+
+      if (
+        r4GrandTotal !== null &&
+        prevRndTotal !== null &&
+        r4GrandTotal === prevRndTotal
+      ) {
+        strength += 6;
+        matchedTotal = true;
+      }
+
+      // Require at least two independent pieces of Round-4 identity.
+      const independentMatches =
+        (matchedPlace ? 1 : 0) +
+        (matchedRating ? 1 : 0) +
+        (matchedTotal ? 1 : 0);
+
+      if (independentMatches >= 2) {
+        candidates.push({
+          index: index,
+          strength: strength,
+          matchedPlace: matchedPlace,
+          matchedRating: matchedRating,
+          matchedTotal: matchedTotal
+        });
       }
     });
 
-    const ranked = Object.keys(candidateIndexes)
-      .map(index => ({ index: Number(index), strength: candidateIndexes[index] }))
-      .sort((a, b) => b.strength - a.strength);
+    candidates.sort((a, b) => b.strength - a.strength);
 
-    // Only assign when all useful unique tokens agree on one score row.
+    if (!candidates.length) return;
+
+    // Only use the best candidate if it is unambiguous.
     if (
-      ranked.length === 1 ||
-      (ranked.length > 1 && ranked[0].strength > ranked[1].strength)
+      candidates.length === 1 ||
+      candidates[0].strength > candidates[1].strength
     ) {
+      const c = candidates[0];
+      const bits = [];
+      if (c.matchedPlace) bits.push('place');
+      if (c.matchedRating) bits.push('rating');
+      if (c.matchedTotal) bits.push('total');
+
       assign(
         pick,
-        ranked[0].index,
-        'identity-map:' + identity.path
+        c.index,
+        'r4-fingerprint:' + bits.join('+')
       );
     }
   });
 
   Object.defineProperty(assignments, '_debug', {
     value: {
-      dataKeys: schema.dataKeys,
-      scoreKeys: schema.scoreKeys,
-      identityPaths: schema.identityPaths,
-      identityRecordCount: identityRecords.length
+      scoreKeys:
+        scoreList.length && scoreList[0] && typeof scoreList[0] === 'object'
+          ? Object.keys(scoreList[0])
+          : []
     },
     enumerable: false
   });
@@ -683,253 +749,17 @@ function web8_buildFinalsAssignments_(scores, rawRoot, picks) {
   return assignments;
 }
 
-function web8_getFinalsSchema_(rawRoot, scoreList) {
-  let data = rawRoot;
-  const wrapped = web8_getFieldTopLevel_(rawRoot, ['data']);
-  if (wrapped && typeof wrapped === 'object') data = wrapped;
+function web8_plainNumber_(value) {
+  if (value === null || value === undefined || value === '') return null;
 
-  const dataKeys = data && typeof data === 'object'
-    ? Object.keys(data)
-    : [];
-
-  const scoreKeys =
-    scoreList && scoreList.length && scoreList[0] && typeof scoreList[0] === 'object'
-      ? Object.keys(scoreList[0])
-      : [];
-
-  const identityRecords = [];
-  const identityPaths = [];
-
-  function addRecord(record, path, mapKey) {
-    if (!record || typeof record !== 'object' || Array.isArray(record)) return;
-    identityRecords.push({
-      record: record,
-      path: path,
-      mapKey: mapKey == null ? '' : String(mapKey)
-    });
-    if (identityPaths.indexOf(path) === -1) identityPaths.push(path);
+  if (typeof value === 'string') {
+    const cleaned = value.trim().replace(/^T/i, '');
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : null;
   }
 
-  // Only inspect data's immediate children and one object level below.
-  dataKeys.forEach(key => {
-    if (web8_normalizeKey_(key) === 'scores') return;
-
-    const value = data[key];
-
-    if (Array.isArray(value)) {
-      value.slice(0, 500).forEach((record, index) => {
-        if (record && typeof record === 'object' && !Array.isArray(record)) {
-          addRecord(record, 'data.' + key, index);
-        }
-      });
-      return;
-    }
-
-    if (!value || typeof value !== 'object') return;
-
-    const childKeys = Object.keys(value);
-
-    // Treat object values themselves as a possible keyed player map.
-    childKeys.slice(0, 500).forEach(childKey => {
-      const child = value[childKey];
-
-      if (child && typeof child === 'object' && !Array.isArray(child)) {
-        addRecord(child, 'data.' + key, childKey);
-
-        // One additional object level, but never recurse further.
-        Object.keys(child).slice(0, 100).forEach(grandKey => {
-          const grand = child[grandKey];
-          if (grand && typeof grand === 'object' && !Array.isArray(grand)) {
-            addRecord(
-              grand,
-              'data.' + key + '.' + childKey,
-              grandKey
-            );
-          }
-        });
-      }
-    });
-  });
-
-  return {
-    dataKeys: dataKeys,
-    scoreKeys: scoreKeys,
-    identityRecords: identityRecords,
-    identityPaths: identityPaths.slice(0, 20)
-  };
-}
-
-function web8_getJoinTokensFast_(record, mapKey) {
-  const tokens = [];
-
-  function add(key, value, source) {
-    if (value === null || value === undefined || value === '') return;
-
-    const stringValue = String(value).trim().toLowerCase();
-    if (!stringValue) return;
-
-    const normalizedKey = web8_normalizeKey_(key || '');
-
-    if (
-      normalizedKey.indexOf('name') !== -1 ||
-      normalizedKey.indexOf('score') !== -1 ||
-      normalizedKey.indexOf('par') !== -1 ||
-      normalizedKey.indexOf('place') !== -1 ||
-      normalizedKey.indexOf('played') !== -1 ||
-      normalizedKey.indexOf('hole') !== -1 ||
-      normalizedKey.indexOf('round') !== -1 ||
-      normalizedKey.indexOf('completed') !== -1 ||
-      normalizedKey === 'haspdganum'
-    ) {
-      return;
-    }
-
-    const token = {
-      key: normalizedKey,
-      value: stringValue,
-      source: source || 'field'
-    };
-
-    if (!tokens.some(t => t.key === token.key && t.value === token.value)) {
-      tokens.push(token);
-    }
-  }
-
-  if (mapKey !== null && mapKey !== undefined && String(mapKey) !== '') {
-    add('__mapkey', mapKey, 'mapkey');
-  }
-
-  function scan(obj, depth) {
-    if (!obj || typeof obj !== 'object' || Array.isArray(obj) || depth > 1) return;
-
-    Object.keys(obj).forEach(key => {
-      const value = obj[key];
-
-      if (typeof value === 'string' || typeof value === 'number') {
-        add(key, value, 'field');
-      } else if (value && typeof value === 'object' && !Array.isArray(value)) {
-        scan(value, depth + 1);
-      }
-    });
-  }
-
-  scan(record, 0);
-  return tokens;
-}
-
-function web8_scoreRowHasTokenFast_(row, token) {
-  let matched = false;
-
-  function compare(key, value) {
-    if (matched || value === null || value === undefined) return;
-
-    const normalizedKey = web8_normalizeKey_(key || '');
-    const stringValue = String(value).trim().toLowerCase();
-
-    if (!stringValue || stringValue !== token.value) return;
-
-    const keyLooksId =
-      normalizedKey.indexOf('id') !== -1 ||
-      normalizedKey.indexOf('num') !== -1 ||
-      normalizedKey.indexOf('member') !== -1 ||
-      normalizedKey.indexOf('player') !== -1;
-
-    const tokenLooksId =
-      token.key.indexOf('id') !== -1 ||
-      token.key.indexOf('num') !== -1 ||
-      token.key.indexOf('member') !== -1 ||
-      token.key.indexOf('player') !== -1 ||
-      token.key === 'mapkey';
-
-    if (
-      normalizedKey === token.key ||
-      token.source === 'mapkey' ||
-      (keyLooksId && tokenLooksId)
-    ) {
-      matched = true;
-    }
-  }
-
-  function scan(obj, depth) {
-    if (matched || !obj || typeof obj !== 'object' || Array.isArray(obj) || depth > 1) return;
-
-    Object.keys(obj).forEach(key => {
-      const value = obj[key];
-
-      if (typeof value === 'string' || typeof value === 'number') {
-        compare(key, value);
-      } else if (value && typeof value === 'object' && !Array.isArray(value)) {
-        scan(value, depth + 1);
-      }
-    });
-  }
-
-  scan(row, 0);
-  return matched;
-}
-
-function web8_recordMatchesPickFast_(row, pick) {
-  if (!row || typeof row !== 'object' || !pick) return false;
-
-  const wantedPdga = String(pick.pdga || '').replace(/\D/g, '');
-  const aliases = [pick.player].concat(pick.aliases || []).filter(Boolean);
-  let pdgaMatched = false;
-  let nameMatched = false;
-
-  function scan(obj, depth) {
-    if (!obj || typeof obj !== 'object' || Array.isArray(obj) || depth > 1) return;
-
-    Object.keys(obj).forEach(key => {
-      const value = obj[key];
-
-      if (typeof value === 'string' || typeof value === 'number') {
-        const normalizedKey = web8_normalizeKey_(key);
-
-        if (
-          wantedPdga &&
-          normalizedKey !== 'haspdganum' &&
-          (
-            normalizedKey.indexOf('pdga') !== -1 ||
-            normalizedKey.indexOf('member') !== -1
-          ) &&
-          String(value).replace(/\D/g, '') === wantedPdga
-        ) {
-          pdgaMatched = true;
-        }
-
-        if (
-          normalizedKey.indexOf('name') !== -1 &&
-          aliases.some(alias => web8_namesEquivalent_(value, alias))
-        ) {
-          nameMatched = true;
-        }
-      } else if (value && typeof value === 'object' && !Array.isArray(value)) {
-        scan(value, depth + 1);
-      }
-    });
-  }
-
-  scan(row, 0);
-  return pdgaMatched || nameMatched;
-}
-
-function web8_getFieldTopLevel_(obj, names) {
-  if (!obj || typeof obj !== 'object') return undefined;
-
-  const wanted = {};
-  names.forEach(name => {
-    wanted[web8_normalizeKey_(name)] = true;
-  });
-
-  const keys = Object.keys(obj);
-
-  for (let i = 0; i < keys.length; i++) {
-    if (wanted[web8_normalizeKey_(keys[i])]) {
-      return obj[keys[i]];
-    }
-  }
-
-  return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
 
