@@ -46,7 +46,7 @@ function doGet(e) {
   } catch (error) {
     payload = {
       ok: false,
-      bridgeVersion: 'direct-v1',
+      bridgeVersion: 'direct-v2',
       error: error && error.message ? error.message : String(error)
     };
   }
@@ -58,7 +58,7 @@ function doGet(e) {
 
 function web8_getPayload_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_direct_v1';
+  const cacheKey = 'pdga_picks_direct_v2';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -322,7 +322,13 @@ function web8_getPayload_() {
         updated: p.updated,
         drop: p.drop
       })),
-      feedDiagnostics: diagnostics
+      feedDiagnostics: diagnostics,
+      matchDiagnostics: {
+        kyleFinalsMatched: !!web8_findPlayer_(
+          roundScores[5],
+          WEB8_PICKS.find(p => p.pdga === '85132')
+        )
+      }
     };
 
     try {
@@ -481,6 +487,7 @@ function web8_findPlayer_(scores, pick) {
     .filter(Boolean);
 
   return (scores || []).find(player => {
+    // First try the normal top-level fields used in R1-R4.
     const pdgaNumber = web8_getPdgaNumber_(player);
 
     if (
@@ -505,10 +512,61 @@ function web8_findPlayer_(scores, pick) {
       ].filter(Boolean).join(' ')
     ].filter(Boolean);
 
-    return candidateNames.some(candidate =>
-      aliases.some(alias => web8_namesEquivalent_(candidate, alias))
+    if (
+      candidateNames.some(candidate =>
+        aliases.some(alias => web8_namesEquivalent_(candidate, alias))
+      )
+    ) {
+      return true;
+    }
+
+    // Finals records can nest player identity inside another object.
+    // Search all scalar values recursively for the PDGA number or full name.
+    const scalarValues = [];
+    web8_collectScalarValues_(player, scalarValues, 0);
+
+    if (pick.pdga) {
+      const wantedPdga = String(pick.pdga).replace(/\D/g, '');
+
+      if (
+        scalarValues.some(value => {
+          const digits = String(value == null ? '' : value).replace(/\D/g, '');
+          return digits === wantedPdga;
+        })
+      ) {
+        return true;
+      }
+    }
+
+    return scalarValues.some(value =>
+      aliases.some(alias => web8_namesEquivalent_(value, alias))
     );
   }) || null;
+}
+
+function web8_collectScalarValues_(value, out, depth) {
+  if (depth > 5 || value === null || value === undefined) return;
+
+  if (
+    typeof value === 'string' ||
+    typeof value === 'number'
+  ) {
+    out.push(value);
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.slice(0, 100).forEach(item =>
+      web8_collectScalarValues_(item, out, depth + 1)
+    );
+    return;
+  }
+
+  if (typeof value === 'object') {
+    Object.keys(value).forEach(key =>
+      web8_collectScalarValues_(value[key], out, depth + 1)
+    );
+  }
 }
 
 function web8_getPlayerName_(player) {
@@ -543,13 +601,39 @@ function web8_getField_(obj, names) {
 
   const keys = Object.keys(obj);
 
+  // Prefer top-level fields because score/progress fields live there
+  // in normal PDGA round responses.
   for (let i = 0; i < keys.length; i++) {
     if (wanted[web8_normalizeKey_(keys[i])]) {
       return obj[keys[i]];
     }
   }
 
-  return undefined;
+  // Finals player identity may be nested. Search only a few levels deep
+  // as a fallback so we don't accidentally wander into unrelated data.
+  function search(value, depth) {
+    if (depth > 3 || !value || typeof value !== 'object') return undefined;
+
+    const childKeys = Object.keys(value);
+
+    for (let i = 0; i < childKeys.length; i++) {
+      if (wanted[web8_normalizeKey_(childKeys[i])]) {
+        return value[childKeys[i]];
+      }
+    }
+
+    for (let i = 0; i < childKeys.length; i++) {
+      const child = value[childKeys[i]];
+      if (child && typeof child === 'object') {
+        const found = search(child, depth + 1);
+        if (found !== undefined) return found;
+      }
+    }
+
+    return undefined;
+  }
+
+  return search(obj, 0);
 }
 
 function web8_normalizeKey_(key) {
