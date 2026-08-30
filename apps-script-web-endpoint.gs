@@ -46,7 +46,7 @@ function doGet(e) {
   } catch (error) {
     payload = {
       ok: false,
-      bridgeVersion: 'direct-v2',
+      bridgeVersion: 'direct-v3',
       error: error && error.message ? error.message : String(error)
     };
   }
@@ -58,7 +58,7 @@ function doGet(e) {
 
 function web8_getPayload_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_direct_v2';
+  const cacheKey = 'pdga_picks_direct_v3';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -116,7 +116,18 @@ function web8_getPayload_() {
       let hasRoundScore = false;
 
       for (let round = 1; round <= currentRound; round++) {
-        const found = web8_findPlayer_(roundScores[round], pick);
+        let found = web8_findPlayer_(roundScores[round], pick);
+
+        // Finals can omit/restructure the normal name + PDGA fields.
+        // If direct matching fails in R5, map the player from their known
+        // Round 4 record using stable internal identity fields.
+        if (!found && round === 5) {
+          const round4Reference = web8_findPlayer_(roundScores[4], pick);
+          if (round4Reference) {
+            found = web8_findPlayerByReference_(roundScores[5], round4Reference);
+          }
+        }
+
         if (!found) continue;
 
         latestFound = found;
@@ -305,7 +316,7 @@ function web8_getPayload_() {
 
     const payload = {
       ok: true,
-      bridgeVersion: 'direct-v1',
+      bridgeVersion: 'direct-v3',
       eventId: WEB8_EVENT_ID,
       division: WEB8_DIVISION,
       currentRound: currentRound,
@@ -323,12 +334,25 @@ function web8_getPayload_() {
         drop: p.drop
       })),
       feedDiagnostics: diagnostics,
-      matchDiagnostics: {
-        kyleFinalsMatched: !!web8_findPlayer_(
-          roundScores[5],
-          WEB8_PICKS.find(p => p.pdga === '85132')
-        )
-      }
+      matchDiagnostics: (() => {
+        const kylePick = WEB8_PICKS.find(p => p.pdga === '85132');
+        const kyleR4 = web8_findPlayer_(roundScores[4], kylePick);
+        const kyleDirectFinals = web8_findPlayer_(roundScores[5], kylePick);
+        const kyleReferenceFinals =
+          !kyleDirectFinals && kyleR4
+            ? web8_findPlayerByReference_(roundScores[5], kyleR4)
+            : null;
+
+        return {
+          kyleRound4Matched: !!kyleR4,
+          kyleDirectFinalsMatched: !!kyleDirectFinals,
+          kyleReferenceFinalsMatched: !!kyleReferenceFinals,
+          kyleFinalsMatched: !!(kyleDirectFinals || kyleReferenceFinals),
+          kyleReferenceTokens: kyleR4
+            ? web8_collectIdentityTokens_(kyleR4).slice(0, 10)
+            : []
+        };
+      })()
     };
 
     try {
@@ -567,6 +591,70 @@ function web8_collectScalarValues_(value, out, depth) {
       web8_collectScalarValues_(value[key], out, depth + 1)
     );
   }
+}
+
+function web8_findPlayerByReference_(scores, referencePlayer) {
+  if (!referencePlayer) return null;
+
+  const referenceTokens = web8_collectIdentityTokens_(referencePlayer);
+
+  if (!referenceTokens.length) return null;
+
+  return (scores || []).find(candidate => {
+    const candidateTokens = web8_collectIdentityTokens_(candidate);
+
+    return candidateTokens.some(token =>
+      referenceTokens.indexOf(token) !== -1
+    );
+  }) || null;
+}
+
+function web8_collectIdentityTokens_(value) {
+  const tokens = [];
+
+  function walk(node, depth, parentKey) {
+    if (depth > 6 || node === null || node === undefined) return;
+
+    if (
+      typeof node === 'string' ||
+      typeof node === 'number'
+    ) {
+      const key = web8_normalizeKey_(parentKey || '');
+
+      // Restrict this fallback to fields that look like persistent player IDs,
+      // not generic scores/places/card IDs that can collide.
+      const identityKey =
+        key.indexOf('pdga') !== -1 ||
+        key.indexOf('member') !== -1 ||
+        key === 'playerid' ||
+        key === 'userid' ||
+        key === 'personid' ||
+        key === 'profileid' ||
+        key === 'competitorid' ||
+        key === 'participantid' ||
+        key === 'playernumber' ||
+        key === 'membernumber';
+
+      if (identityKey) {
+        const token = key + ':' + String(node).trim().toLowerCase();
+        if (token && tokens.indexOf(token) === -1) tokens.push(token);
+      }
+
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      node.slice(0, 100).forEach(item => walk(item, depth + 1, parentKey));
+      return;
+    }
+
+    if (typeof node === 'object') {
+      Object.keys(node).forEach(key => walk(node[key], depth + 1, key));
+    }
+  }
+
+  walk(value, 0, '');
+  return tokens;
 }
 
 function web8_getPlayerName_(player) {
