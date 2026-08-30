@@ -158,6 +158,7 @@ function web_getSheetPayload_() {
 
   return {
     ok: true,
+    bridgeVersion: 'finals-v3',
     eventId: '97344',
     division: 'MPO',
     currentRound: currentRounds.length ? Math.max.apply(null, currentRounds) : 1,
