@@ -46,7 +46,7 @@ function doGet(e) {
   } catch (error) {
     payload = {
       ok: false,
-      bridgeVersion: 'direct-v16',
+      bridgeVersion: 'direct-v17',
       error: error && error.message ? error.message : String(error)
     };
   }
@@ -58,7 +58,7 @@ function doGet(e) {
 
 function web8_getPayload_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_direct_v16';
+  const cacheKey = 'pdga_picks_direct_v17';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -137,7 +137,7 @@ function web8_getPayload_() {
     });
 
     const finalsAssignments = currentRound === 5
-      ? web8_buildFinalsAssignmentsV16_(
+      ? web8_buildFinalsAssignmentsV17_(
           roundScores[5],
           updatedScores12,
           roundScores[4],
@@ -369,7 +369,7 @@ function web8_getPayload_() {
 
     const payload = {
       ok: true,
-      bridgeVersion: 'direct-v16',
+      bridgeVersion: 'direct-v17',
       eventId: WEB8_EVENT_ID,
       division: WEB8_DIVISION,
       currentRound: currentRound,
@@ -432,7 +432,8 @@ function web8_getPayload_() {
               ? ''
               : kyleDbg.fullRowToPar,
           kyleLiveSummary: kyleDbg.liveSummary || {},
-          kyleResponseProgress: kyleDbg.responseProgress || {}
+          kyleResponseProgress: kyleDbg.responseProgress || {},
+          kyleUpdatedProgress: kyleDbg.updatedProgress || {}
         };
       })()
     };
@@ -1080,7 +1081,7 @@ function web8_identityRowCount_(scores) {
   }).length;
 }
 
-function web8_buildFinalsAssignmentsV16_(round12Scores, updatedScores, round4Scores, picks) {
+function web8_buildFinalsAssignmentsV17_(round12Scores, updatedScores, round4Scores, picks) {
   const assignments = {};
   const playerBatch = web8_fetchPlayerLiveBatch_(round4Scores, picks);
 
@@ -1174,28 +1175,45 @@ function web8_buildFinalsAssignmentsV16_(round12Scores, updatedScores, round4Sco
     }
 
     const infoProgress = info.progress || {};
+    const selectedScoreId = web8_getField_(playerRecord, [
+      'ScoreID', 'scoreId', 'scoreID', 'score_id'
+    ]);
+
+    const updatedProgress = web8_extractProgressFromUpdatedRows_(
+      updatedScores || [],
+      selectedScoreId
+    );
+
     const derivedPlayed = Math.max(
       web8_derivePlayedFromScores_(fallback),
-      web8_number_(infoProgress.played, 0)
+      web8_number_(infoProgress.played, 0),
+      web8_number_(updatedProgress.played, 0)
     );
 
     if (derivedPlayed > 0) {
       fallback.Played = derivedPlayed;
     }
 
-    if (infoProgress.completed) {
+    if (infoProgress.completed || updatedProgress.completed) {
       fallback.Completed = true;
     }
+
+    const bestPlace =
+      updatedProgress.place !== undefined &&
+      updatedProgress.place !== null &&
+      String(updatedProgress.place) !== ''
+        ? updatedProgress.place
+        : infoProgress.place;
 
     if (
       (fallback.RunningPlace === undefined ||
        fallback.RunningPlace === null ||
        fallback.RunningPlace === '') &&
-      infoProgress.place !== undefined &&
-      infoProgress.place !== null &&
-      String(infoProgress.place) !== ''
+      bestPlace !== undefined &&
+      bestPlace !== null &&
+      String(bestPlace) !== ''
     ) {
-      fallback.RunningPlace = infoProgress.place;
+      fallback.RunningPlace = bestPlace;
     }
 
     // This is a verified player-specific Round-12 score record.
@@ -1285,13 +1303,95 @@ function web8_buildFinalsAssignmentsV16_(round12Scores, updatedScores, round4Sco
             kyleProgress.place === undefined
               ? ''
               : String(kyleProgress.place)
-        }
+        },
+        updatedProgress: web8_extractProgressFromUpdatedRows_(
+          updatedScores || [],
+          kyleSelectedScoreId
+        )
       }
     },
     enumerable: false
   });
 
   return assignments;
+}
+
+function web8_extractProgressFromUpdatedRows_(rows, selectedScoreId) {
+  const result = {
+    played: 0,
+    completed: false,
+    place: ''
+  };
+
+  if (
+    selectedScoreId === null ||
+    selectedScoreId === undefined ||
+    String(selectedScoreId) === ''
+  ) {
+    return result;
+  }
+
+  const matching = (rows || []).filter(row =>
+    web8_objectContainsExactFieldValue_(
+      row,
+      ['ScoreID', 'scoreId', 'scoreID', 'score_id'],
+      selectedScoreId,
+      8
+    )
+  );
+
+  matching.forEach(row => {
+    const played = Math.max(
+      web8_number_(web8_getField_(row, [
+        'Played', 'played', 'HolesPlayed', 'holesPlayed'
+      ]), 0),
+      web8_derivePlayedFromScores_(row)
+    );
+
+    if (played > result.played) result.played = played;
+
+    if (web8_bool_(web8_getField_(row, [
+      'Completed', 'completed', 'IsComplete', 'isComplete'
+    ]))) {
+      result.completed = true;
+    }
+
+    const roundStatus = web8_getField_(row, [
+      'RoundStatus', 'roundStatus',
+      'PlayerThrowStatus', 'playerThrowStatus',
+      'Status', 'status'
+    ]);
+
+    if (
+      roundStatus !== null &&
+      roundStatus !== undefined
+    ) {
+      const s = String(roundStatus).trim().toLowerCase();
+      if (
+        s.indexOf('complete') !== -1 ||
+        s.indexOf('finish') !== -1 ||
+        s === 'final' ||
+        s === 'f'
+      ) {
+        result.completed = true;
+      }
+    }
+
+    const place = web8_getField_(row, [
+      'RunningPlace', 'runningPlace', 'Place', 'place',
+      'Position', 'position'
+    ]);
+
+    if (
+      place !== null &&
+      place !== undefined &&
+      String(place) !== ''
+    ) {
+      result.place = place;
+    }
+  });
+
+  return result;
 }
 
 function web8_derivePlayedFromScores_(record) {
