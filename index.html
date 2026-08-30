@@ -111,9 +111,9 @@
     </div>
 
     <section id="setupPanel" class="setup hidden">
-      <h2>One connection step left</h2>
-      <p>The page is installed, but it needs the Google Apps Script web-app URL that exposes the already-working contest sheet.</p>
-      <p>After that URL is placed in <code>config.js</code>, this page refreshes automatically every 30 seconds.</p>
+      <h2>Live data unavailable</h2>
+      <p>The page could not get a response from the live scoring backend.</p>
+      <p>Try refreshing once. If the message remains, the backend is still updating or timed out.</p>
     </section>
 
     <section id="liveContent" class="hidden">
@@ -281,7 +281,7 @@
         setupPanel.classList.add("hidden");
         liveContent.classList.remove("hidden");
 
-        const finalsBridgeCurrent = payload.bridgeVersion === "direct-v5";
+        const finalsBridgeCurrent = payload.bridgeVersion === "direct-v6";
         statusDot.className = finalsBridgeCurrent ? "dot live" : "dot";
         statusText.textContent = !finalsBridgeCurrent
           ? "Backend update required"
@@ -297,7 +297,7 @@
         const kyle = players.find(p => p.player === "Kyle Klein");
         const kyleR5 = kyle && Array.isArray(kyle.rounds) ? kyle.rounds[4] : null;
         const debugBits = [
-          "Build: debug-5 · Backend: " + esc(payload.bridgeVersion || "unknown"),
+          "Build: debug-6 · Backend: " + esc(payload.bridgeVersion || "unknown"),
           finalsDiag
             ? "R5/API " + esc(finalsDiag.apiRound) +
               ": " + esc(finalsDiag.players) + " players, live=" + esc(finalsDiag.realScoring)
@@ -316,7 +316,13 @@
                     ? "-"
                     : payload.matchDiagnostics.kyleFinalsIndex
                 ) +
-              " · assigned=" + esc(payload.matchDiagnostics.assignedFinalists)
+              " · assigned=" + esc(payload.matchDiagnostics.assignedFinalists) +
+              " · candidates=" + esc(
+                Array.isArray(payload.matchDiagnostics.candidatePaths) &&
+                payload.matchDiagnostics.candidatePaths.length
+                  ? payload.matchDiagnostics.candidatePaths.join(", ")
+                  : "none"
+              )
             : "Kyle match diagnostic unavailable"
         ];
         $("liveDebug").innerHTML = debugBits.join(" &nbsp;·&nbsp; ");
@@ -444,7 +450,7 @@
           loading = false;
           showError("Live data timed out");
           schedule();
-        }, 12000);
+        }, 20000);
       }
 
       loadData(false);
