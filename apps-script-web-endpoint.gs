@@ -158,7 +158,7 @@ function web_getSheetPayload_() {
 
   return {
     ok: true,
-    bridgeVersion: 'finals-v6',
+    bridgeVersion: 'finals-v7',
     eventId: '97344',
     division: 'MPO',
     currentRound: currentRounds.length ? Math.max.apply(null, currentRounds) : 1,
@@ -313,7 +313,7 @@ function web_applyFinalsRound12_(payload) {
 
 function web_fetchFinalsRound12_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_finals_dynamic_v6';
+  const cacheKey = 'pdga_picks_finals_dynamic_v7';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -338,13 +338,10 @@ function web_fetchFinalsRound12_() {
     }
   } catch (e) {}
 
-  const candidates = [];
-  [eventRound, 12, 5].forEach(round => {
-    const n = Number(round);
-    if (Number.isFinite(n) && n > 0 && candidates.indexOf(n) === -1) {
-      candidates.push(n);
-    }
-  });
+  // The event metadata can still report Round 4 during the special Finals
+  // phase. Never allow that completed prior round to compete with today's
+  // Finals feed. PDGA's two plausible Finals API identifiers are 12 and 5.
+  const candidates = [12, 5];
 
   const attempts = [];
 
@@ -437,11 +434,11 @@ function web_fetchFinalsRound12_() {
       });
 
       // Strongly prefer the round that contains LIVE scoring for our actual picks.
-      // Real holes played are the strongest signal. This prevents a
-      // placeholder Round=5 roster full of zeroes from beating the Finals feed.
+      // Finals selection must be based on TODAY'S live hole progress.
+      // A feed with real holes played always beats a placeholder feed.
       const quality =
-        (matchedActivePicks * 1000000) +
-        (totalPlayed * 10000) +
+        (totalPlayed * 1000000) +
+        (matchedActivePicks * 10000) +
         (activePlayers * 100) +
         matchedPicks;
 
@@ -472,10 +469,18 @@ function web_fetchFinalsRound12_() {
   attempts.sort((a, b) => b.quality - a.quality);
   const best = attempts[0];
 
-  if (!best || !best.scores || !best.scores.length) {
+  if (!best || !best.scores || !best.scores.length || best.totalPlayed <= 0) {
     throw new Error(
-      'Could not find a live Finals score feed. Tried API rounds: ' +
-      candidates.join(', ')
+      'Could not find a Finals feed with live holes played. Tried API rounds: ' +
+      candidates.join(', ') +
+      '. ' +
+      attempts.map(a =>
+        'R' + a.round +
+        ': players=' + (a.scores ? a.scores.length : 0) +
+        ', matched=' + a.matchedPicks +
+        ', matchedActive=' + a.matchedActivePicks +
+        ', holes=' + a.totalPlayed
+      ).join(' | ')
     );
   }
 
