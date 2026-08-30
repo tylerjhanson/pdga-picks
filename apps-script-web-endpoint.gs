@@ -1,35 +1,36 @@
 /**
- * Web endpoint for the standalone PDGA Picks page.
+ * PDGA Picks standalone web endpoint — direct PDGA feed.
  *
- * Add this file to the SAME Apps Script project as the working contest Sheet.
+ * This endpoint does NOT depend on the Contest sheet for live scores.
+ * It fetches PDGA rounds 1-4 plus Finals (API Round 12) directly,
+ * calculates the contest, and returns JSONP to GitHub Pages.
  *
- * Deploy as a Web app:
+ * Deploy as Web app:
  *   Execute as: Me
  *   Who has access: Anyone
- *
- * IMPORTANT FOR 2026 PRO WORLDS:
- * PDGA identifies the fifth/final round as API Round=12 ("Finals"), not Round=5.
- * This bridge maps PDGA Round 12 -> contest R5.
  */
 
-const WEB_PICKS_ = [
-  { entrant: 'Ben',    player: 'Ricky Wysocki',    pdga: '38008', aliases: ['Richard Wysocki', 'Ricky Wysocki'] },
-  { entrant: 'Ben',    player: 'Isaac Robinson',   pdga: '50670', aliases: ['Isaac Robinson'] },
-  { entrant: 'Ben',    player: 'Evan Smith',       pdga: '101574', aliases: ['Evan Smith'] },
-  { entrant: 'Ben',    player: 'Luke Taylor',      pdga: '102119', aliases: ['Luke Taylor'] },
-  { entrant: 'Ben',    player: 'Kyle Klein',       pdga: '85132', aliases: ['Kyle Klein'] },
+const WEB8_EVENT_ID = '97344';
+const WEB8_DIVISION = 'MPO';
 
-  { entrant: 'Nathan', player: 'Niklas Anttila',   pdga: '91249', aliases: ['Niklas Anttila', 'Niklas Antilla'] },
-  { entrant: 'Nathan', player: 'Gannon Buhr',      pdga: '75412', aliases: ['Gannon Buhr'] },
-  { entrant: 'Nathan', player: 'Ezra Robinson',    pdga: '50671', aliases: ['Ezra Robinson'] },
-  { entrant: 'Nathan', player: 'Sullivan Tipton',  pdga: '78817', aliases: ['Sullivan Tipton'] },
-  { entrant: 'Nathan', player: 'Cole Redalen',     pdga: '79748', aliases: ['Cole Redalen'] },
+const WEB8_PICKS = [
+  { entrant: 'Ben', player: 'Ricky Wysocki', pdga: '38008', aliases: ['Richard Wysocki', 'Ricky Wysocki'] },
+  { entrant: 'Ben', player: 'Isaac Robinson', pdga: '50670', aliases: ['Isaac Robinson'] },
+  { entrant: 'Ben', player: 'Evan Smith', pdga: '101574', aliases: ['Evan Smith'] },
+  { entrant: 'Ben', player: 'Luke Taylor', pdga: '102119', aliases: ['Luke Taylor'] },
+  { entrant: 'Ben', player: 'Kyle Klein', pdga: '85132', aliases: ['Kyle Klein'] },
 
-  { entrant: 'Tyler',  player: 'Calvin Heimburg',  pdga: '45971', aliases: ['Calvin Heimburg'] },
-  { entrant: 'Tyler',  player: 'Eagle McMahon',    pdga: '37817', aliases: ['Eagle McMahon'] },
-  { entrant: 'Tyler',  player: 'Simon Lizotte',    pdga: '8332', aliases: ['Simon Lizotte'] },
-  { entrant: 'Tyler',  player: 'Adam Hammes',      pdga: '57365', aliases: ['Adam Hammes'] },
-  { entrant: 'Tyler',  player: 'Anthony Barela',   pdga: '44382', aliases: ['Anthony Barela'] }
+  { entrant: 'Nathan', player: 'Niklas Anttila', pdga: '91249', aliases: ['Niklas Anttila', 'Niklas Antilla'] },
+  { entrant: 'Nathan', player: 'Gannon Buhr', pdga: '75412', aliases: ['Gannon Buhr'] },
+  { entrant: 'Nathan', player: 'Ezra Robinson', pdga: '50671', aliases: ['Ezra Robinson'] },
+  { entrant: 'Nathan', player: 'Sullivan Tipton', pdga: '78817', aliases: ['Sullivan Tipton'] },
+  { entrant: 'Nathan', player: 'Cole Redalen', pdga: '79748', aliases: ['Cole Redalen'] },
+
+  { entrant: 'Tyler', player: 'Calvin Heimburg', pdga: '45971', aliases: ['Calvin Heimburg'] },
+  { entrant: 'Tyler', player: 'Eagle McMahon', pdga: '37817', aliases: ['Eagle McMahon'] },
+  { entrant: 'Tyler', player: 'Simon Lizotte', pdga: '8332', aliases: ['Simon Lizotte'] },
+  { entrant: 'Tyler', player: 'Adam Hammes', pdga: '57365', aliases: ['Adam Hammes'] },
+  { entrant: 'Tyler', player: 'Anthony Barela', pdga: '44382', aliases: ['Anthony Barela'] }
 ];
 
 function doGet(e) {
@@ -38,35 +39,14 @@ function doGet(e) {
     ? requested
     : '__pdgaPicksReceive';
 
-  let refreshWarning = '';
-
-  try {
-    web_refreshContest_();
-  } catch (error) {
-    refreshWarning = error && error.message ? error.message : String(error);
-  }
-
   let payload;
 
   try {
-    payload = web_getSheetPayload_();
-
-    // PDGA's final round is special: Round=12 is "Finals".
-    // Overlay that feed onto the Sheet snapshot as contest R5.
-    try {
-      payload = web_applyFinalsRound12_(payload);
-    } catch (finalsError) {
-      if (!refreshWarning) {
-        refreshWarning = finalsError && finalsError.message
-          ? finalsError.message
-          : String(finalsError);
-      }
-    }
-
-    if (refreshWarning) payload.refreshWarning = refreshWarning;
+    payload = web8_getPayload_();
   } catch (error) {
     payload = {
       ok: false,
+      bridgeVersion: 'direct-v1',
       error: error && error.message ? error.message : String(error)
     };
   }
@@ -76,244 +56,9 @@ function doGet(e) {
     .setMimeType(ContentService.MimeType.JAVASCRIPT);
 }
 
-function web_refreshContest_() {
+function web8_getPayload_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_web_refresh';
-
-  if (cache.get(cacheKey)) return;
-
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(1500)) return;
-
-  try {
-    if (cache.get(cacheKey)) return;
-
-    if (typeof refreshScores !== 'function') {
-      throw new Error('refreshScores() was not found in this Apps Script project.');
-    }
-
-    refreshScores();
-    cache.put(cacheKey, String(Date.now()), 20);
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function web_getSheetPayload_() {
-  const ss = SpreadsheetApp.getActive();
-  const sheet = ss.getSheetByName('Contest');
-  if (!sheet) throw new Error('Contest sheet not found.');
-
-  const standings = sheet.getRange(3, 1, 3, 5).getValues()
-    .filter(row => row[1])
-    .map(row => ({
-      rank: web_valueOrNull_(row[0]),
-      entrant: String(row[1] || ''),
-      contestTotal: web_numericOrNull_(row[2]),
-      droppedPlayer: String(row[3] || ''),
-      droppedScore: web_numericOrNull_(row[4])
-    }));
-
-  const headerRow = 8;
-  const firstDataRow = 9;
-  const headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
-  const headerMap = {};
-
-  headers.forEach((header, i) => {
-    if (header) headerMap[String(header).trim()] = i;
-  });
-
-  const numRows = Math.max(0, Math.min(15, sheet.getLastRow() - firstDataRow + 1));
-  const raw = numRows
-    ? sheet.getRange(firstDataRow, 1, numRows, sheet.getLastColumn()).getValues()
-    : [];
-
-  const idx = name => Object.prototype.hasOwnProperty.call(headerMap, name) ? headerMap[name] : -1;
-  const cell = (row, name) => idx(name) >= 0 ? row[idx(name)] : '';
-
-  const players = raw
-    .filter(row => cell(row, 'Entrant') && cell(row, 'Player'))
-    .map((row, order) => ({
-      entrant: String(cell(row, 'Entrant') || ''),
-      player: String(cell(row, 'Player') || ''),
-      rounds: [1,2,3,4,5].map(n => web_numericOrNull_(cell(row, 'R' + n))),
-      total: web_numericOrNull_(cell(row, 'Total')),
-      currentRound: web_numericOrNull_(cell(row, 'Current Rd')),
-      thru: String(cell(row, 'Thru') || '-'),
-      place: String(cell(row, 'Place') || ''),
-      updated: web_dateIsoOrNull_(cell(row, 'Updated')),
-      drop: String(cell(row, 'Drop?') || '').toUpperCase() === 'DROP',
-      _order: order
-    }));
-
-  const updatedTimes = players
-    .map(p => p.updated)
-    .filter(Boolean)
-    .map(value => new Date(value).getTime())
-    .filter(Number.isFinite);
-
-  const currentRounds = players
-    .map(p => Number(p.currentRound))
-    .filter(Number.isFinite);
-
-  return {
-    ok: true,
-    bridgeVersion: 'finals-v7',
-    eventId: '97344',
-    division: 'MPO',
-    currentRound: currentRounds.length ? Math.max.apply(null, currentRounds) : 1,
-    updatedAt: updatedTimes.length
-      ? new Date(Math.max.apply(null, updatedTimes)).toISOString()
-      : new Date().toISOString(),
-    standings,
-    players
-  };
-}
-
-function web_applyFinalsRound12_(payload) {
-  const finals = web_fetchFinalsRound12_();
-  const scores = finals.scores || [];
-  payload.finalsFeed = {
-    detectedPlayers: scores.length,
-    fetchedAt: finals.fetchedAt,
-    sourceRound: finals.sourceRound || null,
-    parser: finals.debug || ''
-  };
-
-  // If PDGA has not populated the Finals feed yet, keep the Sheet snapshot.
-  if (!scores.length) return payload;
-
-  const hasFinalsScoring = scores.some(player => {
-    const played = web_number_(web_getField_(player, ['Played', 'played', 'HolesPlayed', 'holesPlayed']), 0);
-    const completed = web_bool_(web_getField_(player, ['Completed', 'completed', 'IsComplete', 'isComplete']));
-    const roundToPar = web_scoreNumber_(web_getField_(player, [
-      'RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar', 'RdToPar', 'rdToPar'
-    ]));
-    return played > 0 || completed || (roundToPar !== null && roundToPar !== 0);
-  });
-
-  // The feed exists even before the first throw. Once it exists, this is contest R5.
-  payload.currentRound = 5;
-
-  payload.players.forEach((player, order) => {
-    player._order = typeof player._order === 'number' ? player._order : order;
-    const pick = web_findPick_(player.entrant, player.player);
-    if (!pick) return;
-
-    let feedPlayer = null;
-
-    // Use the same player matcher as the working R1-R4 Sheet whenever available.
-    // It matches PDGA number first, then flexible name/alias variants.
-    if (typeof findPlayer_ === 'function') {
-      feedPlayer = findPlayer_(scores, pick);
-    }
-
-    // Fallback for a standalone endpoint file.
-    if (!feedPlayer) {
-      feedPlayer = scores.find(p => {
-        const pdga = web_getPdgaNumber_(p);
-        if (pdga && String(pdga) === String(pick.pdga)) return true;
-
-        const candidate = web_getField_(p, [
-          'Name', 'name', 'PlayerName', 'playerName',
-          'FullName', 'fullName', 'ShortName', 'shortName'
-        ]);
-
-        return [pick.player].concat(pick.aliases || [])
-          .some(alias => web_namesMatch_(candidate, alias));
-      }) || null;
-    }
-
-    player.currentRound = 5;
-
-    if (!feedPlayer) {
-      // Not present in Finals feed = did not advance to the final round.
-      player.thru = 'CUT';
-      player.place = player.place || '';
-      return;
-    }
-
-    const played = typeof number_ === 'function' && typeof getField_ === 'function'
-      ? number_(getField_(feedPlayer, ['Played', 'played', 'HolesPlayed', 'holesPlayed']), 0)
-      : web_number_(web_getField_(feedPlayer, ['Played', 'played', 'HolesPlayed', 'holesPlayed']), 0);
-
-    const holes = typeof number_ === 'function' && typeof getField_ === 'function'
-      ? number_(getField_(feedPlayer, ['Holes', 'holes', 'TotalHoles', 'totalHoles']), 18)
-      : web_number_(web_getField_(feedPlayer, ['Holes', 'holes', 'TotalHoles', 'totalHoles']), 18);
-
-    const completed = typeof bool_ === 'function' && typeof getField_ === 'function'
-      ? bool_(getField_(feedPlayer, ['Completed', 'completed', 'IsComplete', 'isComplete']))
-      : web_bool_(web_getField_(feedPlayer, ['Completed', 'completed', 'IsComplete', 'isComplete']));
-
-    const roundToPar = typeof scoreNumber_ === 'function' && typeof getField_ === 'function'
-      ? scoreNumber_(getField_(feedPlayer, ['RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar', 'RdToPar', 'rdToPar']))
-      : web_scoreNumber_(web_getField_(feedPlayer, ['RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar', 'RdToPar', 'rdToPar']));
-
-    const cumulative = typeof scoreNumber_ === 'function' && typeof getField_ === 'function'
-      ? scoreNumber_(getField_(feedPlayer, ['ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar', 'Total']))
-      : web_scoreNumber_(web_getField_(feedPlayer, ['ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar', 'Total']));
-
-    // Only put a number into R5 after the player has actually started.
-    if (played > 0 || completed) {
-      if (roundToPar !== null) {
-        player.rounds[4] = roundToPar;
-      } else if (cumulative !== null) {
-        // Finals feeds can differ from normal rounds. If PDGA gives us the
-        // cumulative tournament score but not RoundtoPar, derive R5 from the
-        // four completed rounds already stored in the Sheet.
-        const priorRounds = (player.rounds || []).slice(0, 4);
-        if (
-          priorRounds.length === 4 &&
-          priorRounds.every(value => typeof value === 'number' && Number.isFinite(value))
-        ) {
-          player.rounds[4] =
-            cumulative - priorRounds.reduce((sum, value) => sum + value, 0);
-        }
-      }
-    }
-
-    // ToPar is the correct cumulative tournament total for finalists.
-    if (cumulative !== null) {
-      player.total = cumulative;
-    }
-
-    player.thru = completed || played >= holes
-      ? 'F'
-      : (played > 0 ? String(played) : '-');
-
-    const runningPlace = typeof getField_ === 'function'
-      ? getField_(feedPlayer, ['RunningPlace', 'runningPlace', 'Place', 'place', 'Position', 'position'])
-      : web_getField_(feedPlayer, ['RunningPlace', 'runningPlace', 'Place', 'place', 'Position', 'position']);
-
-    if (runningPlace !== null && runningPlace !== undefined && runningPlace !== '') {
-      const tied = typeof bool_ === 'function' && typeof getField_ === 'function'
-        ? bool_(getField_(feedPlayer, ['Tied', 'tied', 'IsTied', 'isTied']))
-        : web_bool_(web_getField_(feedPlayer, ['Tied', 'tied', 'IsTied', 'isTied']));
-      player.place = (tied ? 'T' : '') + runningPlace;
-    }
-
-    player.updated = finals.fetchedAt;
-  });
-
-  // Once real Finals scoring has started, use the fresh fetch time.
-  if (hasFinalsScoring) payload.updatedAt = finals.fetchedAt;
-
-  payload.standings = web_recomputeStandings_(payload.players);
-
-  // Keep the Sheet useful too. This writes R5 / Total / Round / Thru / Place
-  // back to the existing rows after the old refreshScores() has run.
-  try {
-    web_writeFinalsToSheet_(payload);
-  } catch (e) {
-    // The public page should still work even if the Sheet write fails.
-  }
-
-  return payload;
-}
-
-function web_fetchFinalsRound12_() {
-  const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_finals_dynamic_v7';
+  const cacheKey = 'pdga_picks_direct_v1';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -322,364 +67,334 @@ function web_fetchFinalsRound12_() {
     } catch (e) {}
   }
 
-  // Do not assume the UI's ?round=12 is also the API round.
-  // Ask PDGA event metadata first, then test both known candidates.
-  let eventRound = null;
+  const lock = LockService.getScriptLock();
 
-  try {
-    if (
-      typeof fetchEventRaw_ === 'function' &&
-      typeof extractCurrentRoundFromEvent_ === 'function'
-    ) {
-      const eventResult = fetchEventRaw_();
-      if (eventResult && eventResult.json) {
-        eventRound = extractCurrentRoundFromEvent_(eventResult.json);
-      }
-    }
-  } catch (e) {}
-
-  // The event metadata can still report Round 4 during the special Finals
-  // phase. Never allow that completed prior round to compete with today's
-  // Finals feed. PDGA's two plausible Finals API identifiers are 12 and 5.
-  const candidates = [12, 5];
-
-  const attempts = [];
-
-  candidates.forEach(round => {
-    try {
-      const result = fetchRoundRaw_(round);
-      let scores = [];
-
-      if (result && result.json) {
-        let root = result.json;
-
-        if (typeof unwrapJsonStrings_ === 'function') {
-          root = unwrapJsonStrings_(root);
-        }
-
-        const data =
-          root && typeof root === 'object' && !Array.isArray(root)
-            ? (typeof getField_ === 'function'
-                ? getField_(root, ['data'])
-                : web_getField_(root, ['data']))
-            : null;
-
-        const directScores =
-          data && typeof data === 'object' && !Array.isArray(data)
-            ? (typeof getField_ === 'function'
-                ? getField_(data, ['scores', 'Scores'])
-                : web_getField_(data, ['scores', 'Scores']))
-            : null;
-
-        if (Array.isArray(directScores)) {
-          scores = directScores;
-        } else if (typeof extractScoreArray_ === 'function') {
-          scores = extractScoreArray_(root) || [];
-        } else {
-          scores = web_extractScoreArray_(root);
-        }
-      }
-
-      let activePlayers = 0;
-      let matchedPicks = 0;
-      let matchedActivePicks = 0;
-      let totalPlayed = 0;
-
-      (scores || []).forEach(player => {
-        const played = typeof number_ === 'function' && typeof getField_ === 'function'
-          ? number_(getField_(player, ['Played', 'played', 'HolesPlayed', 'holesPlayed']), 0)
-          : web_number_(web_getField_(player, ['Played', 'played', 'HolesPlayed', 'holesPlayed']), 0);
-
-        const completed = typeof bool_ === 'function' && typeof getField_ === 'function'
-          ? bool_(getField_(player, ['Completed', 'completed', 'IsComplete', 'isComplete']))
-          : web_bool_(web_getField_(player, ['Completed', 'completed', 'IsComplete', 'isComplete']));
-
-        const roundToPar = typeof scoreNumber_ === 'function' && typeof getField_ === 'function'
-          ? scoreNumber_(getField_(player, ['RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar', 'RdToPar', 'rdToPar']))
-          : web_scoreNumber_(web_getField_(player, ['RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar', 'RdToPar', 'rdToPar']));
-
-        // PDGA future/placeholder round feeds can contain RoundtoPar = 0
-        // before anyone has started. Do NOT count that as live scoring.
-        const active =
-          played > 0 ||
-          completed ||
-          (roundToPar !== null && roundToPar !== 0);
-
-        if (active) activePlayers++;
-        totalPlayed += played;
-
-        WEB_PICKS_.forEach(pick => {
-          let matches = false;
-
-          if (typeof findPlayer_ === 'function') {
-            matches = findPlayer_([player], pick) === player;
-          } else {
-            const pdga = web_getPdgaNumber_(player);
-            if (pdga && String(pdga) === String(pick.pdga)) {
-              matches = true;
-            } else {
-              const candidateName = web_getField_(player, [
-                'Name','name','PlayerName','playerName','FullName','fullName','ShortName','shortName'
-              ]);
-              matches = [pick.player].concat(pick.aliases || [])
-                .some(alias => web_namesMatch_(candidateName, alias));
-            }
-          }
-
-          if (matches) {
-            matchedPicks++;
-            if (active) matchedActivePicks++;
-          }
-        });
-      });
-
-      // Strongly prefer the round that contains LIVE scoring for our actual picks.
-      // Finals selection must be based on TODAY'S live hole progress.
-      // A feed with real holes played always beats a placeholder feed.
-      const quality =
-        (totalPlayed * 1000000) +
-        (matchedActivePicks * 10000) +
-        (activePlayers * 100) +
-        matchedPicks;
-
-      attempts.push({
-        round: round,
-        scores: scores || [],
-        http: result && result.code,
-        activePlayers: activePlayers,
-        matchedPicks: matchedPicks,
-        matchedActivePicks: matchedActivePicks,
-        totalPlayed: totalPlayed,
-        quality: quality
-      });
-    } catch (e) {
-      attempts.push({
-        round: round,
-        scores: [],
-        error: e && e.message ? e.message : String(e),
-        activePlayers: 0,
-        matchedPicks: 0,
-        matchedActivePicks: 0,
-        totalPlayed: 0,
-        quality: -1
-      });
-    }
-  });
-
-  attempts.sort((a, b) => b.quality - a.quality);
-  const best = attempts[0];
-
-  if (!best || !best.scores || !best.scores.length || best.totalPlayed <= 0) {
-    throw new Error(
-      'Could not find a Finals feed with live holes played. Tried API rounds: ' +
-      candidates.join(', ') +
-      '. ' +
-      attempts.map(a =>
-        'R' + a.round +
-        ': players=' + (a.scores ? a.scores.length : 0) +
-        ', matched=' + a.matchedPicks +
-        ', matchedActive=' + a.matchedActivePicks +
-        ', holes=' + a.totalPlayed
-      ).join(' | ')
-    );
+  if (!lock.tryLock(2500)) {
+    const retryCache = cache.get(cacheKey);
+    if (retryCache) return JSON.parse(retryCache);
   }
 
-  const result = {
-    scores: best.scores,
-    sourceRound: best.round,
-    fetchedAt: new Date().toISOString(),
-    debug:
-      'eventRound=' + eventRound +
-      '; chosen=' + best.round +
-      '; matched=' + best.matchedPicks +
-      '; matchedActive=' + best.matchedActivePicks +
-      '; activePlayers=' + best.activePlayers +
-      '; totalPlayed=' + best.totalPlayed
-  };
-
   try {
-    cache.put(cacheKey, JSON.stringify(result), 10);
-  } catch (e) {}
+    const roundScores = {};
+    const diagnostics = [];
 
-  return result;
-}
+    // Contest R1-R4 map normally. Contest R5 is PDGA's special Finals/API 12.
+    for (let contestRound = 1; contestRound <= 5; contestRound++) {
+      const apiRound = contestRound === 5 ? 12 : contestRound;
+      const fetched = web8_fetchRound_(apiRound);
+      const scores = web8_extractScores_(fetched.json);
 
-function web_recomputeStandings_(players) {
-  const entrantOrder = ['Ben', 'Nathan', 'Tyler'];
+      roundScores[contestRound] = scores;
 
-  const standings = entrantOrder.map(entrant => {
-    const group = players
-      .filter(p => p.entrant === entrant)
-      .map((p, i) => ({ ...p, _stable: typeof p._order === 'number' ? p._order : i }))
-      .filter(p => typeof p.total === 'number' && Number.isFinite(p.total))
-      .sort((a, b) => {
-        if (a.total !== b.total) return a.total - b.total;
-        return a._stable - b._stable;
+      diagnostics.push({
+        contestRound: contestRound,
+        apiRound: apiRound,
+        http: fetched.code,
+        players: scores.length,
+        realScoring: web8_roundHasRealScoring_(scores)
       });
-
-    if (group.length < 5) {
-      return {
-        entrant: entrant,
-        contestTotal: null,
-        droppedPlayer: '',
-        droppedScore: null
-      };
     }
 
-    // Best-to-worst list. If worst is tied, the visually LAST tied player is dropped.
-    const dropped = group[group.length - 1];
-    const contestTotal = group.reduce((sum, p) => sum + p.total, 0) - dropped.total;
+    let currentRound = 1;
 
-    return {
-      entrant: entrant,
-      contestTotal: contestTotal,
-      droppedPlayer: dropped.player,
-      droppedScore: dropped.total
-    };
-  });
-
-  standings.sort((a, b) => {
-    const aBlank = typeof a.contestTotal !== 'number';
-    const bBlank = typeof b.contestTotal !== 'number';
-    if (aBlank && bBlank) return entrantOrder.indexOf(a.entrant) - entrantOrder.indexOf(b.entrant);
-    if (aBlank) return 1;
-    if (bBlank) return -1;
-    if (a.contestTotal !== b.contestTotal) return a.contestTotal - b.contestTotal;
-    return entrantOrder.indexOf(a.entrant) - entrantOrder.indexOf(b.entrant);
-  });
-
-  standings.forEach(s => {
-    if (typeof s.contestTotal !== 'number') {
-      s.rank = null;
-    } else {
-      s.rank = 1 + standings.filter(
-        other => typeof other.contestTotal === 'number' && other.contestTotal < s.contestTotal
-      ).length;
+    for (let round = 1; round <= 5; round++) {
+      if (web8_roundHasRealScoring_(roundScores[round])) {
+        currentRound = round;
+      }
     }
-  });
 
-  return standings;
-}
-
-function web_writeFinalsToSheet_(payload) {
-  const ss = SpreadsheetApp.getActive();
-  const sheet = ss.getSheetByName('Contest');
-  if (!sheet) return;
-
-  const headerRow = 8;
-  const firstDataRow = 9;
-  const headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
-  const col = {};
-
-  headers.forEach((header, i) => {
-    if (header) col[String(header).trim()] = i + 1;
-  });
-
-  const rowCount = Math.min(15, Math.max(0, sheet.getLastRow() - firstDataRow + 1));
-  const rows = rowCount
-    ? sheet.getRange(firstDataRow, 1, rowCount, Math.max(col['Updated'] || 12, 12)).getDisplayValues()
-    : [];
-
-  payload.players.forEach(player => {
-    const pick = web_findPick_(player.entrant, player.player);
-    if (!pick) return;
-
-    const target = rows.findIndex(row => {
-      const entrant = String(row[(col['Entrant'] || 1) - 1] || '');
-      const display = String(row[(col['Player'] || 2) - 1] || '');
-      return entrant === player.entrant && web_namesMatch_(display, pick.player);
+    const draftOrder = {};
+    WEB8_PICKS.forEach((pick, i) => {
+      draftOrder[pick.entrant + '|' + pick.player] = i;
     });
 
-    if (target < 0) return;
-    const rowNumber = firstDataRow + target;
+    const players = WEB8_PICKS.map((pick, order) => {
+      const rounds = [null, null, null, null, null];
+      let latestFound = null;
+      let foundInCurrentRound = false;
+      let roundSum = 0;
+      let hasRoundScore = false;
 
-    if (col['R5']) {
-      sheet.getRange(rowNumber, col['R5']).setValue(
-        player.rounds && typeof player.rounds[4] === 'number' ? player.rounds[4] : ''
+      for (let round = 1; round <= currentRound; round++) {
+        const found = web8_findPlayer_(roundScores[round], pick);
+        if (!found) continue;
+
+        latestFound = found;
+        if (round === currentRound) foundInCurrentRound = true;
+
+        const played = web8_number_(web8_getField_(found, [
+          'Played', 'played', 'HolesPlayed', 'holesPlayed'
+        ]), 0);
+
+        const completed = web8_bool_(web8_getField_(found, [
+          'Completed', 'completed', 'IsComplete', 'isComplete'
+        ]));
+
+        const roundToPar = web8_scoreNumber_(web8_getField_(found, [
+          'RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar',
+          'RdToPar', 'rdToPar'
+        ]));
+
+        if (
+          roundToPar !== null &&
+          (round < currentRound || played > 0 || completed)
+        ) {
+          rounds[round - 1] = roundToPar;
+          roundSum += roundToPar;
+          hasRoundScore = true;
+        }
+      }
+
+      let total = null;
+      let thru = '-';
+      let place = '';
+
+      if (latestFound) {
+        const cumulative = web8_scoreNumber_(web8_getField_(latestFound, [
+          'ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar', 'Total'
+        ]));
+
+        total = cumulative !== null
+          ? cumulative
+          : (hasRoundScore ? roundSum : null);
+
+        const played = web8_number_(web8_getField_(latestFound, [
+          'Played', 'played', 'HolesPlayed', 'holesPlayed'
+        ]), 0);
+
+        const holes = web8_number_(web8_getField_(latestFound, [
+          'Holes', 'holes', 'TotalHoles', 'totalHoles'
+        ]), 18);
+
+        const completed = web8_bool_(web8_getField_(latestFound, [
+          'Completed', 'completed', 'IsComplete', 'isComplete'
+        ]));
+
+        thru = completed || played >= holes
+          ? 'F'
+          : (played > 0 ? String(played) : '-');
+
+        // If Finals are underway and the player is not in the Finals feed,
+        // they did not advance.
+        if (currentRound === 5 && !foundInCurrentRound) {
+          thru = 'CUT';
+        }
+
+        const runningPlace = web8_getField_(latestFound, [
+          'RunningPlace', 'runningPlace', 'Place', 'place',
+          'Position', 'position'
+        ]);
+
+        if (
+          runningPlace !== null &&
+          runningPlace !== undefined &&
+          runningPlace !== ''
+        ) {
+          const tied = web8_bool_(web8_getField_(latestFound, [
+            'Tied', 'tied', 'IsTied', 'isTied'
+          ]));
+
+          place = (tied ? 'T' : '') + runningPlace;
+        }
+      }
+
+      return {
+        entrant: pick.entrant,
+        player: pick.player,
+        rounds: rounds,
+        total: total,
+        currentRound: currentRound,
+        thru: thru,
+        place: place,
+        updated: new Date().toISOString(),
+        drop: false,
+        _order: order
+      };
+    });
+
+    const entrantOrder = ['Ben', 'Nathan', 'Tyler'];
+
+    players.sort((a, b) => {
+      const entrantDiff =
+        entrantOrder.indexOf(a.entrant) - entrantOrder.indexOf(b.entrant);
+
+      if (entrantDiff !== 0) return entrantDiff;
+
+      const aBlank = typeof a.total !== 'number' || !Number.isFinite(a.total);
+      const bBlank = typeof b.total !== 'number' || !Number.isFinite(b.total);
+
+      if (aBlank && bBlank) return a._order - b._order;
+      if (aBlank) return 1;
+      if (bBlank) return -1;
+
+      if (a.total !== b.total) return a.total - b.total;
+      return a._order - b._order;
+    });
+
+    const standings = entrantOrder.map(entrant => {
+      const group = players.filter(p => p.entrant === entrant);
+      const scored = group.filter(
+        p => typeof p.total === 'number' && Number.isFinite(p.total)
       );
+
+      if (scored.length < 5) {
+        return {
+          rank: null,
+          entrant: entrant,
+          contestTotal: null,
+          droppedPlayer: '',
+          droppedScore: null
+        };
+      }
+
+      // Group is already displayed best-to-worst. Last player is dropped.
+      // This also means a tied worst score drops the visually last tied player.
+      const dropped = scored[scored.length - 1];
+      dropped.drop = true;
+
+      const contestTotal = scored
+        .slice(0, 4)
+        .reduce((sum, player) => sum + player.total, 0);
+
+      return {
+        rank: null,
+        entrant: entrant,
+        contestTotal: contestTotal,
+        droppedPlayer: dropped.player,
+        droppedScore: dropped.total
+      };
+    });
+
+    standings.sort((a, b) => {
+      const aBlank =
+        typeof a.contestTotal !== 'number' ||
+        !Number.isFinite(a.contestTotal);
+
+      const bBlank =
+        typeof b.contestTotal !== 'number' ||
+        !Number.isFinite(b.contestTotal);
+
+      if (aBlank && bBlank) {
+        return entrantOrder.indexOf(a.entrant) - entrantOrder.indexOf(b.entrant);
+      }
+
+      if (aBlank) return 1;
+      if (bBlank) return -1;
+
+      if (a.contestTotal !== b.contestTotal) {
+        return a.contestTotal - b.contestTotal;
+      }
+
+      return entrantOrder.indexOf(a.entrant) - entrantOrder.indexOf(b.entrant);
+    });
+
+    standings.forEach(row => {
+      if (
+        typeof row.contestTotal !== 'number' ||
+        !Number.isFinite(row.contestTotal)
+      ) {
+        row.rank = null;
+      } else {
+        row.rank = 1 + standings.filter(other =>
+          typeof other.contestTotal === 'number' &&
+          Number.isFinite(other.contestTotal) &&
+          other.contestTotal < row.contestTotal
+        ).length;
+      }
+    });
+
+    const payload = {
+      ok: true,
+      bridgeVersion: 'direct-v1',
+      eventId: WEB8_EVENT_ID,
+      division: WEB8_DIVISION,
+      currentRound: currentRound,
+      updatedAt: new Date().toISOString(),
+      standings: standings,
+      players: players.map(p => ({
+        entrant: p.entrant,
+        player: p.player,
+        rounds: p.rounds,
+        total: p.total,
+        currentRound: p.currentRound,
+        thru: p.thru,
+        place: p.place,
+        updated: p.updated,
+        drop: p.drop
+      })),
+      feedDiagnostics: diagnostics
+    };
+
+    try {
+      cache.put(cacheKey, JSON.stringify(payload), 15);
+    } catch (e) {}
+
+    return payload;
+  } finally {
+    try {
+      lock.releaseLock();
+    } catch (e) {}
+  }
+}
+
+function web8_fetchRound_(apiRound) {
+  const url =
+    'https://www.pdga.com/apps/tournament/live-api/live_results_fetch_round' +
+    '?TournID=' + encodeURIComponent(WEB8_EVENT_ID) +
+    '&Division=' + encodeURIComponent(WEB8_DIVISION) +
+    '&Round=' + encodeURIComponent(apiRound);
+
+  const response = UrlFetchApp.fetch(url, {
+    method: 'get',
+    followRedirects: true,
+    muteHttpExceptions: true,
+    headers: {
+      'Accept': 'application/json, text/plain, */*',
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
+        'AppleWebKit/537.36 Chrome/151 Safari/537.36',
+      'Referer':
+        'https://www.pdga.com/live/event/' +
+        WEB8_EVENT_ID + '/' + WEB8_DIVISION +
+        '/scores?round=' + apiRound,
+      'Cache-Control': 'no-cache'
     }
-    if (col['Total'] && typeof player.total === 'number') {
-      sheet.getRange(rowNumber, col['Total']).setValue(player.total);
-    }
-    if (col['Current Rd']) sheet.getRange(rowNumber, col['Current Rd']).setValue(5);
-    if (col['Thru']) sheet.getRange(rowNumber, col['Thru']).setValue(player.thru || '-');
-    if (col['Place']) sheet.getRange(rowNumber, col['Place']).setValue(player.place || '');
-    if (col['Updated']) sheet.getRange(rowNumber, col['Updated']).setValue(new Date());
   });
 
-  const standingsValues = payload.standings.map(s => [
-    s.rank || '',
-    s.entrant,
-    typeof s.contestTotal === 'number' ? s.contestTotal : '',
-    s.droppedPlayer || '',
-    typeof s.droppedScore === 'number' ? s.droppedScore : ''
-  ]);
+  const code = response.getResponseCode();
+  const text = response.getContentText();
 
-  if (standingsValues.length) {
-    sheet.getRange(3, 1, standingsValues.length, 5).setValues(standingsValues);
+  if (code < 200 || code >= 300) {
+    throw new Error('PDGA API Round ' + apiRound + ' returned HTTP ' + code);
   }
 
-  SpreadsheetApp.flush();
-}
+  let json;
 
-function web_findPick_(entrant, displayedName) {
-  return WEB_PICKS_.find(p =>
-    p.entrant === entrant && web_namesMatch_(displayedName, p.player)
-  ) || null;
-}
-
-function web_namesMatch_(a, b) {
-  const aa = web_normalizeName_(a);
-  const bb = web_normalizeName_(b);
-
-  if (aa === bb) return true;
-
-  // Sheet displays names as "C. Heimburg", while pick config has "Calvin Heimburg".
-  const ap = aa.split(' ');
-  const bp = bb.split(' ');
-
-  if (ap.length >= 2 && bp.length >= 2) {
-    const aLast = ap[ap.length - 1];
-    const bLast = bp[bp.length - 1];
-    const aFirst = ap[0];
-    const bFirst = bp[0];
-
-    if (
-      aLast === bLast &&
-      aFirst.charAt(0) === bFirst.charAt(0)
-    ) {
-      return true;
-    }
+  try {
+    json = JSON.parse(text);
+    json = web8_unwrapJsonStrings_(json);
+  } catch (e) {
+    throw new Error('PDGA API Round ' + apiRound + ' returned invalid JSON');
   }
 
-  return false;
+  return {
+    code: code,
+    json: json
+  };
 }
 
-function web_normalizeName_(value) {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+function web8_extractScores_(root) {
+  if (!root) return [];
 
-function web_getPdgaNumber_(player) {
-  return web_getField_(player, [
-    'PDGANum', 'pdgaNum', 'PDGANumber', 'pdgaNumber',
-    'PDGA', 'pdga', 'PDGA#', 'PDGA_Number', 'pdga_number'
-  ]);
-}
+  let data = root;
 
-function web_extractScoreArray_(root) {
-  let rootValue = root;
-
-  if (rootValue && typeof rootValue === 'object' && !Array.isArray(rootValue)) {
-    const data = web_getField_(rootValue, ['data']);
-    if (data !== undefined) rootValue = data;
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const wrapped = web8_getField_(data, ['data']);
+    if (wrapped !== undefined) data = wrapped;
   }
 
-  if (rootValue && typeof rootValue === 'object' && !Array.isArray(rootValue)) {
-    const direct = web_getField_(rootValue, ['scores', 'Scores']);
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const direct = web8_getField_(data, ['scores', 'Scores']);
     if (Array.isArray(direct)) return direct;
   }
 
@@ -689,22 +404,38 @@ function web_extractScoreArray_(root) {
     if (depth > 8 || value === null || value === undefined) return;
 
     if (Array.isArray(value)) {
-      const objects = value.filter(v => v && typeof v === 'object' && !Array.isArray(v));
+      const objects = value.filter(item =>
+        item && typeof item === 'object' && !Array.isArray(item)
+      );
 
       if (objects.length) {
-        let score = 0;
+        let quality = 0;
 
         objects.slice(0, 10).forEach(obj => {
-          if (web_getField_(obj, ['Name', 'name', 'PlayerName', 'playerName'])) score += 5;
-          if (web_getField_(obj, ['ToPar', 'toPar', 'topar']) !== undefined) score += 3;
-          if (web_getField_(obj, ['RoundtoPar', 'RoundToPar', 'roundToPar']) !== undefined) score += 3;
-          if (web_getField_(obj, ['Played', 'played']) !== undefined) score += 1;
+          if (web8_getPlayerName_(obj)) quality += 5;
+
+          if (web8_getField_(obj, [
+            'ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar'
+          ]) !== undefined) quality += 3;
+
+          if (web8_getField_(obj, [
+            'RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar'
+          ]) !== undefined) quality += 3;
+
+          if (web8_getField_(obj, [
+            'Played', 'played', 'HolesPlayed', 'holesPlayed'
+          ]) !== undefined) quality += 1;
+
+          if (web8_getField_(obj, [
+            'RunningPlace', 'runningPlace', 'Place', 'place'
+          ]) !== undefined) quality += 1;
         });
 
-        candidates.push({ value: value, score: score + Math.min(objects.length, 200) / 100 });
+        quality += Math.min(objects.length, 200) / 100;
+        candidates.push({ array: value, quality: quality });
       }
 
-      value.slice(0, 20).forEach(v => walk(v, depth + 1));
+      value.slice(0, 20).forEach(item => walk(item, depth + 1));
       return;
     }
 
@@ -713,72 +444,239 @@ function web_extractScoreArray_(root) {
     }
   }
 
-  walk(rootValue, 0);
-  candidates.sort((a, b) => b.score - a.score);
+  walk(root, 0);
 
-  return candidates.length && candidates[0].score >= 5
-    ? candidates[0].value
-    : [];
+  candidates.sort((a, b) => b.quality - a.quality);
+
+  if (!candidates.length || candidates[0].quality < 5) return [];
+  return candidates[0].array;
 }
 
-function web_getField_(obj, names) {
+function web8_roundHasRealScoring_(scores) {
+  return (scores || []).some(player => {
+    const played = web8_number_(web8_getField_(player, [
+      'Played', 'played', 'HolesPlayed', 'holesPlayed'
+    ]), 0);
+
+    const completed = web8_bool_(web8_getField_(player, [
+      'Completed', 'completed', 'IsComplete', 'isComplete'
+    ]));
+
+    const roundToPar = web8_scoreNumber_(web8_getField_(player, [
+      'RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar',
+      'RdToPar', 'rdToPar'
+    ]));
+
+    return (
+      played > 0 ||
+      completed ||
+      (roundToPar !== null && roundToPar !== 0)
+    );
+  });
+}
+
+function web8_findPlayer_(scores, pick) {
+  const aliases = [pick.player]
+    .concat(pick.aliases || [])
+    .filter(Boolean);
+
+  return (scores || []).find(player => {
+    const pdgaNumber = web8_getPdgaNumber_(player);
+
+    if (
+      pick.pdga &&
+      pdgaNumber &&
+      String(pdgaNumber) === String(pick.pdga)
+    ) {
+      return true;
+    }
+
+    const candidateNames = [
+      web8_getPlayerName_(player),
+      web8_getField_(player, ['ShortName', 'shortName', 'short_name']),
+      web8_getField_(player, ['PlayerName', 'playerName', 'player_name']),
+      [
+        web8_getField_(player, ['FirstName', 'firstName', 'first_name']),
+        web8_getField_(player, ['LastName', 'lastName', 'last_name'])
+      ].filter(Boolean).join(' '),
+      [
+        web8_getField_(player, ['LastName', 'lastName', 'last_name']),
+        web8_getField_(player, ['FirstName', 'firstName', 'first_name'])
+      ].filter(Boolean).join(' ')
+    ].filter(Boolean);
+
+    return candidateNames.some(candidate =>
+      aliases.some(alias => web8_namesEquivalent_(candidate, alias))
+    );
+  }) || null;
+}
+
+function web8_getPlayerName_(player) {
+  return web8_getField_(player, [
+    'Name', 'name',
+    'PlayerName', 'playerName', 'player_name',
+    'FullName', 'fullName', 'full_name',
+    'ShortName', 'shortName'
+  ]);
+}
+
+function web8_getPdgaNumber_(player) {
+  const value = web8_getField_(player, [
+    'PDGANum', 'PDGANumber', 'PdgaNum', 'pdgaNum',
+    'pdga_number', 'pdgaNumber',
+    'PDGA', 'pdga',
+    'MemberNumber', 'MemberNum', 'memberNumber', 'member_number'
+  ]);
+
+  return value === undefined || value === null
+    ? ''
+    : String(value).replace(/\D/g, '');
+}
+
+function web8_getField_(obj, names) {
   if (!obj || typeof obj !== 'object') return undefined;
 
-  for (let i = 0; i < names.length; i++) {
-    if (Object.prototype.hasOwnProperty.call(obj, names[i])) return obj[names[i]];
-  }
-
-  const keyMap = {};
-  Object.keys(obj).forEach(key => {
-    keyMap[String(key).toLowerCase()] = key;
+  const wanted = {};
+  names.forEach(name => {
+    wanted[web8_normalizeKey_(name)] = true;
   });
 
-  for (let i = 0; i < names.length; i++) {
-    const actual = keyMap[String(names[i]).toLowerCase()];
-    if (actual !== undefined) return obj[actual];
+  const keys = Object.keys(obj);
+
+  for (let i = 0; i < keys.length; i++) {
+    if (wanted[web8_normalizeKey_(keys[i])]) {
+      return obj[keys[i]];
+    }
   }
 
   return undefined;
 }
 
-function web_numericOrNull_(value) {
-  if (value === '' || value === null || value === undefined) return null;
+function web8_normalizeKey_(key) {
+  return String(key || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function web8_namesEquivalent_(a, b) {
+  const na = web8_normalizeName_(a);
+  const nb = web8_normalizeName_(b);
+
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+
+  const ta = na.split(' ').filter(Boolean).sort();
+  const tb = nb.split(' ').filter(Boolean).sort();
+
+  if (
+    ta.length === tb.length &&
+    ta.every((token, i) => token === tb[i])
+  ) {
+    return true;
+  }
+
+  const setA = {};
+  const setB = {};
+
+  ta.forEach(token => setA[token] = true);
+  tb.forEach(token => setB[token] = true);
+
+  const aInB = ta.every(token => setB[token]);
+  const bInA = tb.every(token => setA[token]);
+
+  return (
+    (ta.length >= 2 && aInB) ||
+    (tb.length >= 2 && bInA)
+  );
+}
+
+function web8_normalizeName_(name) {
+  return String(name || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function web8_scoreNumber_(value) {
+  if (value === null || value === undefined || value === '') return null;
+
+  if (typeof value === 'string') {
+    const s = value.trim().toUpperCase();
+
+    if (s === 'E' || s === 'EVEN') return 0;
+    if (s === 'DNF' || s === 'DNS' || s === 'DNP') return null;
+  }
+
   const n = Number(value);
-  return Number.isFinite(n) ? n : null;
+
+  if (!Number.isFinite(n)) return null;
+  if (n >= 900) return null;
+
+  return n;
 }
 
-function web_scoreNumber_(value) {
-  if (value === '' || value === null || value === undefined) return null;
-  if (typeof value === 'string' && value.trim().toUpperCase() === 'E') return 0;
-
-  const cleaned = typeof value === 'string'
-    ? value.replace(/^\+/, '').trim()
-    : value;
-
-  const n = Number(cleaned);
-  return Number.isFinite(n) ? n : null;
-}
-
-function web_number_(value, fallback) {
+function web8_number_(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 }
 
-function web_bool_(value) {
-  if (value === true || value === 1 || value === '1') return true;
-  if (typeof value === 'string') {
-    return ['true', 'yes', 'y'].indexOf(value.toLowerCase()) >= 0;
+function web8_bool_(value) {
+  if (value === true) return true;
+
+  if (
+    value === false ||
+    value === null ||
+    value === undefined ||
+    value === ''
+  ) {
+    return false;
   }
-  return false;
+
+  if (typeof value === 'number') return value !== 0;
+
+  const s = String(value).trim().toLowerCase();
+
+  return [
+    '1', 'true', 'yes', 'y', 'complete', 'completed'
+  ].indexOf(s) >= 0;
 }
 
-function web_valueOrNull_(value) {
-  return value === '' || value === null || value === undefined ? null : value;
-}
+function web8_unwrapJsonStrings_(value, depth) {
+  depth = depth || 0;
 
-function web_dateIsoOrNull_(value) {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
-  if (!value) return null;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  if (depth > 3) return value;
+
+  if (typeof value === 'string') {
+    const s = value.trim();
+
+    if (
+      (s.indexOf('{') === 0 && s.lastIndexOf('}') === s.length - 1) ||
+      (s.indexOf('[') === 0 && s.lastIndexOf(']') === s.length - 1)
+    ) {
+      try {
+        return web8_unwrapJsonStrings_(JSON.parse(s), depth + 1);
+      } catch (e) {
+        return value;
+      }
+    }
+
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item =>
+      web8_unwrapJsonStrings_(item, depth + 1)
+    );
+  }
+
+  if (value && typeof value === 'object') {
+    Object.keys(value).forEach(key => {
+      value[key] = web8_unwrapJsonStrings_(value[key], depth + 1);
+    });
+  }
+
+  return value;
 }
