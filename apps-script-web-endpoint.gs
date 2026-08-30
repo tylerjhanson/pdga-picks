@@ -158,7 +158,7 @@ function web_getSheetPayload_() {
 
   return {
     ok: true,
-    bridgeVersion: 'finals-v4',
+    bridgeVersion: 'finals-v5',
     eventId: '97344',
     division: 'MPO',
     currentRound: currentRounds.length ? Math.max.apply(null, currentRounds) : 1,
@@ -176,6 +176,7 @@ function web_applyFinalsRound12_(payload) {
   payload.finalsFeed = {
     detectedPlayers: scores.length,
     fetchedAt: finals.fetchedAt,
+    sourceRound: finals.sourceRound || null,
     parser: finals.debug || ''
   };
 
@@ -312,7 +313,7 @@ function web_applyFinalsRound12_(payload) {
 
 function web_fetchFinalsRound12_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_finals_round_12_v2';
+  const cacheKey = 'pdga_picks_finals_dynamic_v5';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -321,92 +322,167 @@ function web_fetchFinalsRound12_() {
     } catch (e) {}
   }
 
-  let scores = [];
-  let debug = '';
+  // Do not assume the UI's ?round=12 is also the API round.
+  // Ask PDGA event metadata first, then test both known candidates.
+  let eventRound = null;
 
-  // BEST PATH: reuse the exact PDGA fetch/parser that already worked for
-  // Rounds 1-4 in the contest Sheet. fetchRoundRaw_(12) is valid even though
-  // the normal Sheet refresh loop only iterates 1-5.
-  if (typeof fetchRoundRaw_ === 'function') {
-    const result = fetchRoundRaw_(12);
-
-    if (result && result.json) {
-      // PDGA's live round endpoint has a stable top-level shape:
-      // { data: { scores: [...] } }.
-      // Read that exact array first. Finals payloads contain other nested
-      // arrays that can fool a generic "best array" detector.
-      let root = result.json;
-
-      if (typeof unwrapJsonStrings_ === 'function') {
-        root = unwrapJsonStrings_(root);
-      }
-
-      const data =
-        root && typeof root === 'object' && !Array.isArray(root)
-          ? (typeof getField_ === 'function'
-              ? getField_(root, ['data'])
-              : web_getField_(root, ['data']))
-          : null;
-
-      const directScores =
-        data && typeof data === 'object' && !Array.isArray(data)
-          ? (typeof getField_ === 'function'
-              ? getField_(data, ['scores', 'Scores'])
-              : web_getField_(data, ['scores', 'Scores']))
-          : null;
-
-      if (Array.isArray(directScores)) {
-        scores = directScores;
-        debug = 'Direct data.scores; HTTP ' + (result && result.code);
-      } else if (typeof extractScoreArray_ === 'function') {
-        scores = extractScoreArray_(root) || [];
-        debug = 'Fallback Sheet parser; HTTP ' + (result && result.code);
+  try {
+    if (
+      typeof fetchEventRaw_ === 'function' &&
+      typeof extractCurrentRoundFromEvent_ === 'function'
+    ) {
+      const eventResult = fetchEventRaw_();
+      if (eventResult && eventResult.json) {
+        eventRound = extractCurrentRoundFromEvent_(eventResult.json);
       }
     }
+  } catch (e) {}
 
-    if (!debug) debug = 'Sheet fetch; HTTP ' + (result && result.code);
-  } else {
-    // Fallback only if the endpoint file was somehow installed without
-    // the main contest script in the same Apps Script project.
-    const url =
-      'https://www.pdga.com/apps/tournament/live-api/live_results_fetch_round' +
-      '?TournID=97344&Division=MPO&Round=12';
-
-    const response = UrlFetchApp.fetch(url, {
-      method: 'get',
-      followRedirects: true,
-      muteHttpExceptions: true,
-      headers: {
-        'Accept': 'application/json, text/plain, */*',
-        'User-Agent': 'Mozilla/5.0 (compatible; PDGA-Picks/1.0)',
-        'Referer': 'https://www.pdga.com/live/event/97344/MPO/scores?round=12',
-        'Cache-Control': 'no-cache'
-      }
-    });
-
-    if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) {
-      throw new Error('PDGA Finals request returned HTTP ' + response.getResponseCode() + '.');
+  const candidates = [];
+  [eventRound, 12, 5].forEach(round => {
+    const n = Number(round);
+    if (Number.isFinite(n) && n > 0 && candidates.indexOf(n) === -1) {
+      candidates.push(n);
     }
+  });
 
-    let json;
+  const attempts = [];
+
+  candidates.forEach(round => {
     try {
-      json = JSON.parse(response.getContentText());
+      const result = fetchRoundRaw_(round);
+      let scores = [];
+
+      if (result && result.json) {
+        let root = result.json;
+
+        if (typeof unwrapJsonStrings_ === 'function') {
+          root = unwrapJsonStrings_(root);
+        }
+
+        const data =
+          root && typeof root === 'object' && !Array.isArray(root)
+            ? (typeof getField_ === 'function'
+                ? getField_(root, ['data'])
+                : web_getField_(root, ['data']))
+            : null;
+
+        const directScores =
+          data && typeof data === 'object' && !Array.isArray(data)
+            ? (typeof getField_ === 'function'
+                ? getField_(data, ['scores', 'Scores'])
+                : web_getField_(data, ['scores', 'Scores']))
+            : null;
+
+        if (Array.isArray(directScores)) {
+          scores = directScores;
+        } else if (typeof extractScoreArray_ === 'function') {
+          scores = extractScoreArray_(root) || [];
+        } else {
+          scores = web_extractScoreArray_(root);
+        }
+      }
+
+      let activePlayers = 0;
+      let matchedPicks = 0;
+      let matchedActivePicks = 0;
+      let totalPlayed = 0;
+
+      (scores || []).forEach(player => {
+        const played = typeof number_ === 'function' && typeof getField_ === 'function'
+          ? number_(getField_(player, ['Played', 'played', 'HolesPlayed', 'holesPlayed']), 0)
+          : web_number_(web_getField_(player, ['Played', 'played', 'HolesPlayed', 'holesPlayed']), 0);
+
+        const completed = typeof bool_ === 'function' && typeof getField_ === 'function'
+          ? bool_(getField_(player, ['Completed', 'completed', 'IsComplete', 'isComplete']))
+          : web_bool_(web_getField_(player, ['Completed', 'completed', 'IsComplete', 'isComplete']));
+
+        const roundToPar = typeof scoreNumber_ === 'function' && typeof getField_ === 'function'
+          ? scoreNumber_(getField_(player, ['RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar', 'RdToPar', 'rdToPar']))
+          : web_scoreNumber_(web_getField_(player, ['RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar', 'RdToPar', 'rdToPar']));
+
+        const active = played > 0 || completed || roundToPar !== null;
+
+        if (active) activePlayers++;
+        totalPlayed += played;
+
+        WEB_PICKS_.forEach(pick => {
+          let matches = false;
+
+          if (typeof findPlayer_ === 'function') {
+            matches = findPlayer_([player], pick) === player;
+          } else {
+            const pdga = web_getPdgaNumber_(player);
+            if (pdga && String(pdga) === String(pick.pdga)) {
+              matches = true;
+            } else {
+              const candidateName = web_getField_(player, [
+                'Name','name','PlayerName','playerName','FullName','fullName','ShortName','shortName'
+              ]);
+              matches = [pick.player].concat(pick.aliases || [])
+                .some(alias => web_namesMatch_(candidateName, alias));
+            }
+          }
+
+          if (matches) {
+            matchedPicks++;
+            if (active) matchedActivePicks++;
+          }
+        });
+      });
+
+      // Strongly prefer the round that contains LIVE scoring for our actual picks.
+      const quality =
+        (matchedActivePicks * 100000) +
+        (matchedPicks * 10000) +
+        (activePlayers * 100) +
+        totalPlayed;
+
+      attempts.push({
+        round: round,
+        scores: scores || [],
+        http: result && result.code,
+        activePlayers: activePlayers,
+        matchedPicks: matchedPicks,
+        matchedActivePicks: matchedActivePicks,
+        totalPlayed: totalPlayed,
+        quality: quality
+      });
     } catch (e) {
-      throw new Error('PDGA Finals response was not valid JSON.');
+      attempts.push({
+        round: round,
+        scores: [],
+        error: e && e.message ? e.message : String(e),
+        activePlayers: 0,
+        matchedPicks: 0,
+        matchedActivePicks: 0,
+        totalPlayed: 0,
+        quality: -1
+      });
     }
+  });
 
-    scores = web_extractScoreArray_(json);
-    debug = 'Fallback parser; HTTP ' + response.getResponseCode();
-  }
+  attempts.sort((a, b) => b.quality - a.quality);
+  const best = attempts[0];
 
-  if (!scores.length) {
-    throw new Error('PDGA Finals feed returned no player scores. ' + debug);
+  if (!best || !best.scores || !best.scores.length) {
+    throw new Error(
+      'Could not find a live Finals score feed. Tried API rounds: ' +
+      candidates.join(', ')
+    );
   }
 
   const result = {
-    scores: scores,
+    scores: best.scores,
+    sourceRound: best.round,
     fetchedAt: new Date().toISOString(),
-    debug: debug
+    debug:
+      'eventRound=' + eventRound +
+      '; chosen=' + best.round +
+      '; matched=' + best.matchedPicks +
+      '; matchedActive=' + best.matchedActivePicks +
+      '; activePlayers=' + best.activePlayers +
+      '; totalPlayed=' + best.totalPlayed
   };
 
   try {
