@@ -46,7 +46,7 @@ function doGet(e) {
   } catch (error) {
     payload = {
       ok: false,
-      bridgeVersion: 'direct-v12',
+      bridgeVersion: 'direct-v13',
       error: error && error.message ? error.message : String(error)
     };
   }
@@ -58,7 +58,7 @@ function doGet(e) {
 
 function web8_getPayload_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_direct_v12';
+  const cacheKey = 'pdga_picks_direct_v13';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -137,7 +137,7 @@ function web8_getPayload_() {
     });
 
     const finalsAssignments = currentRound === 5
-      ? web8_buildFinalsAssignmentsV12_(
+      ? web8_buildFinalsAssignmentsV13_(
           roundScores[5],
           updatedScores12,
           roundScores[4],
@@ -347,7 +347,7 @@ function web8_getPayload_() {
 
     const payload = {
       ok: true,
-      bridgeVersion: 'direct-v12',
+      bridgeVersion: 'direct-v13',
       eventId: WEB8_EVENT_ID,
       division: WEB8_DIVISION,
       currentRound: currentRound,
@@ -390,6 +390,7 @@ function web8_getPayload_() {
               : kyleDbg.selectedRound,
           kyleSelectedResultId: kyleDbg.selectedResultId || '',
           kyleSelectedScoreId: kyleDbg.selectedScoreId || '',
+          kyleDeepScoreIdMatches: kyleDbg.deepScoreIdMatches || 0,
           kyleFullRowMatched: !!kyleDbg.fullRowMatched,
           kyleFullRowMethod: kyleDbg.fullRowMethod || '',
           kyleFullRowIndex:
@@ -880,7 +881,7 @@ function web8_identityRowCount_(scores) {
   }).length;
 }
 
-function web8_buildFinalsAssignmentsV12_(round12Scores, updatedScores, round4Scores, picks) {
+function web8_buildFinalsAssignmentsV13_(round12Scores, updatedScores, round4Scores, picks) {
   const assignments = {};
   const playerBatch = web8_fetchPlayerLiveBatch_(round4Scores, picks);
 
@@ -979,6 +980,33 @@ function web8_buildFinalsAssignmentsV12_(round12Scores, updatedScores, round4Sco
     ? web8_matchPlayerRecordToRound12_(kyleRecord, round12Scores || [])
     : null;
 
+  const kyleSelectedScoreId = kyleRecord
+    ? web8_getField_(kyleRecord, [
+        'ScoreID', 'scoreId', 'scoreID', 'score_id'
+      ])
+    : null;
+
+  let kyleDeepScoreIdMatches = 0;
+
+  if (
+    kyleSelectedScoreId !== null &&
+    kyleSelectedScoreId !== undefined &&
+    String(kyleSelectedScoreId) !== ''
+  ) {
+    (round12Scores || []).forEach(row => {
+      if (
+        web8_objectContainsExactFieldValue_(
+          row,
+          ['ScoreID', 'scoreId', 'scoreID', 'score_id'],
+          kyleSelectedScoreId,
+          8
+        )
+      ) {
+        kyleDeepScoreIdMatches++;
+      }
+    });
+  }
+
   Object.defineProperty(assignments, '_debug', {
     value: {
       kyle: {
@@ -995,11 +1023,9 @@ function web8_buildFinalsAssignmentsV12_(round12Scores, updatedScores, round4Sco
               'ResultID', 'resultId', 'resultID', 'result_id'
             ]) || '')
           : '',
-        selectedScoreId: kyleRecord
-          ? String(web8_getField_(kyleRecord, [
-              'ScoreID', 'scoreId', 'scoreID', 'score_id'
-            ]) || '')
-          : '',
+        selectedScoreId:
+          kyleSelectedScoreId == null ? '' : String(kyleSelectedScoreId),
+        deepScoreIdMatches: kyleDeepScoreIdMatches,
         fullRowMatched: !!(kyleFull && kyleFull.record),
         fullRowMethod: kyleFull ? kyleFull.method : '',
         fullRowIndex: kyleFull ? kyleFull.index : -1,
@@ -1026,8 +1052,97 @@ function web8_buildFinalsAssignmentsV12_(round12Scores, updatedScores, round4Sco
   return assignments;
 }
 
+function web8_objectContainsExactFieldValue_(value, names, wantedValue, maxDepth) {
+  const wantedKeys = {};
+  (names || []).forEach(name => {
+    wantedKeys[web8_normalizeKey_(name)] = true;
+  });
+
+  const wanted = String(wantedValue);
+  let found = false;
+
+  function walk(node, depth) {
+    if (
+      found ||
+      depth > maxDepth ||
+      node === null ||
+      node === undefined
+    ) {
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      node.slice(0, 500).forEach(item => walk(item, depth + 1));
+      return;
+    }
+
+    if (typeof node !== 'object') return;
+
+    Object.keys(node).forEach(key => {
+      if (found) return;
+
+      const child = node[key];
+
+      if (
+        wantedKeys[web8_normalizeKey_(key)] &&
+        child !== null &&
+        child !== undefined &&
+        typeof child !== 'object' &&
+        String(child) === wanted
+      ) {
+        found = true;
+        return;
+      }
+
+      if (child && typeof child === 'object') {
+        walk(child, depth + 1);
+      }
+    });
+  }
+
+  walk(value, 0);
+  return found;
+}
+
 function web8_matchPlayerRecordToRound12_(playerRecord, round12Scores) {
   if (!playerRecord) return null;
+
+  // Strongest bridge: the player endpoint's current ScoreID can be nested
+  // inside the full leaderboard row's Rounds / PrevRounds structures rather
+  // than exposed as that row's top-level ScoreID.
+  const currentScoreId = web8_getField_(playerRecord, [
+    'ScoreID', 'scoreId', 'scoreID', 'score_id'
+  ]);
+
+  if (
+    currentScoreId !== undefined &&
+    currentScoreId !== null &&
+    String(currentScoreId) !== ''
+  ) {
+    const deepScoreMatches = [];
+
+    (round12Scores || []).forEach((row, index) => {
+      if (
+        web8_objectContainsExactFieldValue_(
+          row,
+          ['ScoreID', 'scoreId', 'scoreID', 'score_id'],
+          currentScoreId,
+          8
+        )
+      ) {
+        deepScoreMatches.push(index);
+      }
+    });
+
+    if (deepScoreMatches.length === 1) {
+      return {
+        record: round12Scores[deepScoreMatches[0]],
+        index: deepScoreMatches[0],
+        method: 'scoreid-deep'
+      };
+    }
+  }
+
 
   const strongKeys = [
     'ResultID',
