@@ -46,7 +46,7 @@ function doGet(e) {
   } catch (error) {
     payload = {
       ok: false,
-      bridgeVersion: 'direct-v15',
+      bridgeVersion: 'direct-v16',
       error: error && error.message ? error.message : String(error)
     };
   }
@@ -58,7 +58,7 @@ function doGet(e) {
 
 function web8_getPayload_() {
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'pdga_picks_direct_v15';
+  const cacheKey = 'pdga_picks_direct_v16';
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -137,7 +137,7 @@ function web8_getPayload_() {
     });
 
     const finalsAssignments = currentRound === 5
-      ? web8_buildFinalsAssignmentsV15_(
+      ? web8_buildFinalsAssignmentsV16_(
           roundScores[5],
           updatedScores12,
           roundScores[4],
@@ -207,9 +207,20 @@ function web8_getPayload_() {
           'ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar', 'Total'
         ]));
 
-        total = cumulative !== null
-          ? cumulative
-          : (hasRoundScore ? roundSum : null);
+        const allFiveRoundsKnown =
+          currentRound === 5 &&
+          rounds.slice(0, 5).every(value =>
+            typeof value === 'number' && Number.isFinite(value)
+          );
+
+        // During Finals PDGA's cumulative ToPar can reflect a later live state
+        // even on earlier-round endpoints. For a finalist, the authoritative
+        // contest total is the sum of the five actual RoundtoPar values.
+        total = allFiveRoundsKnown
+          ? rounds.slice(0, 5).reduce((sum, value) => sum + value, 0)
+          : (cumulative !== null
+              ? cumulative
+              : (hasRoundScore ? roundSum : null));
 
         const played = web8_number_(web8_getField_(latestFound, [
           'Played', 'played', 'HolesPlayed', 'holesPlayed'
@@ -358,7 +369,7 @@ function web8_getPayload_() {
 
     const payload = {
       ok: true,
-      bridgeVersion: 'direct-v15',
+      bridgeVersion: 'direct-v16',
       eventId: WEB8_EVENT_ID,
       division: WEB8_DIVISION,
       currentRound: currentRound,
@@ -729,6 +740,28 @@ function web8_extractPlayerLiveProgress_(root, selectedScoreId) {
         completed = true;
       }
 
+      const roundStatus = web8_getField_(node, [
+        'RoundStatus', 'roundStatus',
+        'PlayerThrowStatus', 'playerThrowStatus',
+        'Status', 'status'
+      ]);
+
+      if (
+        roundStatus !== null &&
+        roundStatus !== undefined
+      ) {
+        const statusText = String(roundStatus).trim().toLowerCase();
+
+        if (
+          statusText.indexOf('complete') !== -1 ||
+          statusText.indexOf('finish') !== -1 ||
+          statusText === 'final' ||
+          statusText === 'f'
+        ) {
+          completed = true;
+        }
+      }
+
       const runningPlace = web8_getField_(node, [
         'RunningPlace', 'runningPlace', 'Place', 'place',
         'Position', 'position'
@@ -1047,7 +1080,7 @@ function web8_identityRowCount_(scores) {
   }).length;
 }
 
-function web8_buildFinalsAssignmentsV15_(round12Scores, updatedScores, round4Scores, picks) {
+function web8_buildFinalsAssignmentsV16_(round12Scores, updatedScores, round4Scores, picks) {
   const assignments = {};
   const playerBatch = web8_fetchPlayerLiveBatch_(round4Scores, picks);
 
@@ -1138,17 +1171,6 @@ function web8_buildFinalsAssignmentsV15_(round12Scores, updatedScores, round4Sco
           }
         });
 
-      const r4ToPar = web8_scoreNumber_(web8_getField_(r4, [
-        'ToPar', 'toPar', 'topar', 'TotalToPar', 'totalToPar'
-      ]));
-
-      const finalsRoundToPar = web8_scoreNumber_(web8_getField_(fallback, [
-        'RoundtoPar', 'RoundToPar', 'roundToPar', 'roundtopar'
-      ]));
-
-      if (r4ToPar !== null && finalsRoundToPar !== null) {
-        fallback.ToPar = r4ToPar + finalsRoundToPar;
-      }
     }
 
     const infoProgress = info.progress || {};
