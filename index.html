@@ -276,8 +276,11 @@
         setupPanel.classList.add("hidden");
         liveContent.classList.remove("hidden");
 
-        statusDot.className = "dot live";
-        statusText.textContent = currentRound === 5 ? "Live · Finals" : "Live · Round " + currentRound;
+        const finalsBridgeCurrent = payload.bridgeVersion === "finals-v3";
+        statusDot.className = finalsBridgeCurrent ? "dot live" : "dot";
+        statusText.textContent = !finalsBridgeCurrent
+          ? "Backend update required"
+          : (currentRound === 5 ? "Live · Finals" : "Live · Round " + currentRound);
         updatedText.textContent = payload.updatedAt ? "Updated " + niceTime(payload.updatedAt) : "";
 
         $("cards").innerHTML = standings.map(s => {
